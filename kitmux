@@ -720,10 +720,13 @@ tab_main() {
     started=$EPOCHSECONDS
     shell_line sh -c "$ATTACH_SCRIPT" "=$helper:"
     on_target "$target" "$REPLY" -q -t
+    rc=$?
+    # Say so before the check below, which hangs for as long as the host does.
+    [[ $target != $LOCAL_TARGET ]] && (( rc == SSH_ERROR_STATUS )) &&
+      print -r -- "kitmux: reconnecting to ${target##*@}"
     out=$(tmux_on "$target" list-windows -t "=$helper:" -F '#{window_id}' 2>&1)
     rc=$?
     if [[ $target != $LOCAL_TARGET ]] && (( rc == SSH_ERROR_STATUS )); then
-      print -r -- "kitmux: reconnecting to ${target##*@}"
       sleep $delay
       (( delay = delay * 2 > RECONNECT_MAX ? RECONNECT_MAX : delay * 2 ))
       continue
@@ -819,14 +822,20 @@ destination; no TARGET means '$LOCAL_TARGET'.
 Environment: KITMUX_SSH overrides the ssh command, e.g. \"ssh -F /path/config\"."
 }
 
-# Checks tmux on target $1 and makes sure session $2 is there, restoring a
-# cold server. Dies with a message when the target cannot be used.
-prepare_target() {
-  local target=$1 session=$2 version report
-  local -a lines
+# Checks that target $1 is reachable and runs a supported tmux. Dies with a
+# message otherwise. Also opens the ssh master the later commands reuse.
+check_target() {
+  local target=$1 version
   version=$(tmux_on "$target" -V 2>&1) || die "$target: cannot run tmux: $version"
   tmux_version_ok "$version" ||
     die "$target: tmux $MIN_TMUX_MAJOR.$MIN_TMUX_MINOR or newer is required, found '$version'"
+}
+
+# Makes sure session $2 exists on target $1, restoring a cold server, and
+# clears helper sessions of an earlier run. Dies with a message on failure.
+start_target() {
+  local target=$1 session=$2 report
+  local -a lines
   report=$(connect_target "$target" start "$session" 2>&1) || die "$target: $report"
   lines=("${(@f)report}")
   [[ $lines[-1] == ok ]] || die "$target: ${lines[-1]#error }"
@@ -865,8 +874,12 @@ launcher_main() {
   [[ -r $OVERLAY_CONF ]] || die "missing $OVERLAY_CONF"
 
   init_target_env
+  # Check every target before touching any, so a bad one leaves nothing behind.
   for target in $targets; do
-    prepare_target "$target" "$session"
+    check_target "$target"
+  done
+  for target in $targets; do
+    start_target "$target" "$session"
   done
 
   base=${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}
