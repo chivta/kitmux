@@ -151,5 +151,43 @@ shell_line tmux display "it's"
 check "shell_line escapes a quote" "env LANG=en_US.UTF-8 'tmux' 'display' 'it'\\''s'" "$REPLY"
 check "quoted line survives sh" "it's #{x} \$HOME" "$(shell_line printf %s "it's #{x} \$HOME"; sh -c "$REPLY")"
 
+# --- resurrect hook ---
+typeset -gr HOOK=${0:A:h}/kitmux-resurrect-hook
+
+# Runs the resurrect hook with args $@ on a save file holding $SAVE_LINES
+# (tab-separated fields written with spaces here) and sets REPLY to the file
+# afterwards, lines joined with " | ".
+run_hook() {
+  local file
+  file=$(mktemp) || return 1
+  print -rl -- ${SAVE_LINES// /$'\t'} > $file
+  sh $HOOK "$@" $file
+  REPLY=${(j: | :)${(f)"$(<$file)"}//$'\t'/ }
+  rm -f -- $file
+}
+
+SAVE_LINES=(
+  "grouped_session main__0 main :1 :0"
+  "grouped_session main__12 main :0 :2"
+  "grouped_session work__3 work : :0"
+  "grouped_session other main : :1"
+  "pane main 0 1 :* 0 host :/tmp 1 zsh :"
+  "window main 0 :main__0 1 :* layout off"
+  "window main__x 0 :x 1 :* layout off"
+  "state main__12 main"
+)
+kept_main="grouped_session work__3 work : :0 | grouped_session other main : :1 | pane main 0 1 :* 0 host :/tmp 1 zsh : | window main 0 :main__0 1 :* layout off | window main__x 0 :x 1 :* layout off"
+run_hook
+check "hook drops main helpers by default" "$kept_main" "$REPLY"
+run_hook main
+check "hook drops helpers of the named session" "$kept_main" "$REPLY"
+run_hook main work
+check "hook drops helpers of several sessions" "${kept_main#grouped_session work__3 work : :0 | }" "$REPLY"
+run_hook dev
+check "hook keeps helpers of other sessions" "${(j: | :)SAVE_LINES}" "$REPLY"
+SAVE_LINES=("grouped_session a.b__1 a.b : :0" "grouped_session axb__1 a.b : :0")
+run_hook a.b
+check "hook matches a dot in a session name literally" "grouped_session axb__1 a.b : :0" "$REPLY"
+
 print -r -- "$checks checks, $failures failed"
 (( failures == 0 ))

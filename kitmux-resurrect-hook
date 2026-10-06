@@ -1,0 +1,35 @@
+#!/bin/sh
+# tmux-resurrect post-save-layout hook for kitmux: removes kitmux's helper
+# sessions (SESSION__<number>) from a save file, so a restore brings back only
+# the sessions kitmux mirrors. Install it on every target and add to tmux.conf:
+#
+#   set -g @resurrect-hook-post-save-layout '/path/to/kitmux-resurrect-hook main'
+#
+# Args: the mirrored session names (default: main), then the save file path,
+# which tmux-resurrect appends. A helper shows up in a save file only as the
+# second tab-separated field of grouped_session and state lines; those lines
+# are dropped and every other line is kept as is. POSIX sh and awk only.
+
+DEFAULT_SESSION=main
+HELPER_SEPARATOR=__
+
+[ $# -ge 1 ] || exit 0
+sessions=
+while [ $# -gt 1 ]; do
+  sessions="$sessions $1"
+  shift
+done
+file=$1
+[ -n "$sessions" ] || sessions=$DEFAULT_SESSION
+[ -f "$file" ] || exit 0
+
+tmp="$file.kitmux.$$"
+awk -F '\t' -v sessions="$sessions" -v sep="$HELPER_SEPARATOR" '
+BEGIN { count = split(sessions, names, " ") }
+{
+  for (i = 1; i <= count; i++) {
+    prefix = names[i] sep
+    if (index($2, prefix) == 1 && substr($2, length(prefix) + 1) ~ /^[0-9]+$/) next
+  }
+  print
+}' "$file" > "$tmp" && mv -f "$tmp" "$file" || { rm -f "$tmp"; exit 1; }
