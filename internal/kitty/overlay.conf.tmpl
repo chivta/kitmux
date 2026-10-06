@@ -1,0 +1,35 @@
+# kitmux overlay configuration. kitmux's own kitty instance loads it after the
+# user's kitty.conf. Generated for each run; do not edit.
+
+# Closing the OS window only detaches from tmux, and kitty cannot tell that a
+# kitmux window sits at a shell prompt, so a confirmation would fire on every
+# close.
+confirm_os_window_close 0
+
+# The kitmux daemon lives as long as this kitty instance. Without this, kitty
+# on macOS keeps running after its last window is closed.
+macos_quit_when_last_window_closed yes
+
+# Key bindings. Each one applies only while a kitmux window has the focus
+# (--when-focus-on), so plain kitty tabs keep the user's bindings. The
+# fallback list matches the user's own letter bindings, so a kitmux binding
+# also wins when the key is typed on another keyboard layout.
+
+# New tab: a new tmux window on the focused tab's target.
+map --when-focus-on var:{{.TargetVar}} --allow-fallback=shifted,ascii {{.Keys.NewTab}} launch --type=background -- {{.Bin}} _newtab {{.Socket}} @active-kitty-window-id
+
+# Split side by side / stacked: tmux splits the focused pane, and the new
+# kitty window follows.
+map --when-focus-on var:{{.TargetVar}} --allow-fallback=shifted,ascii {{.Keys.SplitSide}} launch --type=background -- {{.Bin}} _split {{.Socket}} side @active-kitty-window-id
+map --when-focus-on var:{{.TargetVar}} --allow-fallback=shifted,ascii {{.Keys.SplitStacked}} launch --type=background -- {{.Bin}} _split {{.Socket}} stacked @active-kitty-window-id
+
+# Close split: ask, then kill the focused tmux pane.
+map --when-focus-on var:{{.TargetVar}} --allow-fallback=shifted,ascii {{.Keys.CloseSplit}} launch --type=overlay --title kitmux -- {{.Bin}} _confirm {{.Socket}} pane @active-kitty-window-id
+{{- if .Keys.CloseTab}}
+
+# Close tab: ask, then kill the tmux window. These are the keys that the
+# user's configuration leaves bound to close_tab.
+{{- range .Keys.CloseTab}}
+map --when-focus-on var:{{$.TargetVar}} --allow-fallback=shifted,ascii {{.}} launch --type=overlay --title kitmux -- {{$.Bin}} _confirm {{$.Socket}} window @active-kitty-window-id
+{{- end}}
+{{- end}}
