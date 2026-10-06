@@ -115,8 +115,8 @@ type Daemon struct {
 	// windowPanes maps kitty window ids to panes, as of the last look at
 	// kitty.
 	windowPanes map[int]paneKey
-	// warnedLayout remembers tabs already reported for not using the splits
-	// layout.
+	// warnedLayout remembers windows whose tab was already reported for not
+	// taking the splits layout.
 	warnedLayout map[int]bool
 }
 
@@ -258,7 +258,21 @@ func (d *Daemon) startKitty() error {
 	if err != nil {
 		return &cli.Error{Code: cli.CodeKittyFailed, Detail: err.Error()}
 	}
-	overlay, err := kitty.RenderOverlay(d.opts.Bin, d.daemonSocket, kitty.DefaultKeys(runtime.GOOS))
+	var userConfigs []string
+	_, err = os.Stat(d.opts.Config.KittyConf)
+	if err == nil {
+		userConfigs = append(userConfigs, d.opts.Config.KittyConf)
+	}
+	keys := kitty.DefaultKeys(runtime.GOOS)
+	ctx, cancel := context.WithTimeout(d.ctx, kittyCallTimeout)
+	closeTab, err := kitty.CloseTabKeys(ctx, bin, userConfigs)
+	cancel()
+	if err != nil {
+		log.Warn().Err(err).Msg("cannot list close_tab keys; close tab gets no confirmation")
+	}
+	keys = keys.WithCloseTab(closeTab)
+	log.Info().Strs("close_tab", keys.CloseTab).Msg("kitmux key bindings")
+	overlay, err := kitty.RenderOverlay(d.opts.Bin, d.daemonSocket, keys)
 	if err != nil {
 		return &cli.Error{Code: cli.CodeKittyFailed, Detail: err.Error()}
 	}
@@ -282,12 +296,7 @@ func (d *Daemon) startKitty() error {
 		return &cli.Error{Code: cli.CodeRuntimeDir, Detail: err.Error()}
 	}
 
-	var configs []string
-	_, err = os.Stat(d.opts.Config.KittyConf)
-	if err == nil {
-		configs = append(configs, d.opts.Config.KittyConf)
-	}
-	configs = append(configs, overlayPath)
+	configs := append(userConfigs, overlayPath)
 	d.kittyCmd, err = kitty.Start(kitty.StartOptions{
 		Bin: bin, Configs: configs, Socket: d.kittySocket, Session: sessionPath, Log: kittyLog{},
 	})

@@ -145,10 +145,10 @@ func (c *Client) CloseWindow(ctx context.Context, windowID int) error {
 	return err
 }
 
-// GotoLayout switches a tab to the named layout, which must be one of the
-// user's enabled_layouts.
-func (c *Client) GotoLayout(ctx context.Context, tabID int, layout string) error {
-	_, err := c.run(ctx, "goto-layout", "--match", matchID(tabID), layout)
+// GotoLayout switches the tab that holds a window to the named layout, which
+// must be one of the user's enabled_layouts.
+func (c *Client) GotoLayout(ctx context.Context, windowID int, layout string) error {
+	_, err := c.run(ctx, "goto-layout", "--match", matchWindowTab(windowID), layout)
 	return err
 }
 

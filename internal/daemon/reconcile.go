@@ -268,6 +268,12 @@ func (d *Daemon) ensureWindows(v *view) bool {
 					log.Error().Err(err).Str("target", t.spec.Name).Int("pane", l.Pane).Msg("cannot open kitty window")
 					break
 				}
+				if l.NextTo == layout.NoPane {
+					// A new tab starts in the user's default layout;
+					// the splits that follow only mean something in
+					// the splits layout.
+					d.forceSplits(id)
+				}
 				ids[l.Pane] = id
 				d.lastLaunch[key] = time.Now()
 				changed = true
@@ -418,7 +424,7 @@ func (d *Daemon) syncLayouts(v *view, c claims) {
 				continue
 			}
 			if tab.layout != kitty.LayoutSplits {
-				d.forceSplits(tab)
+				d.forceSplits(tab.first)
 				continue
 			}
 			node := layout.FromSplits(buildSplit(v, tab, t, w))
@@ -482,19 +488,20 @@ func (d *Daemon) sendLayout(t *target, windowID string, state *syncState, cmds [
 	})
 }
 
-// forceSplits switches a kitmux tab back to the splits layout, the only one
-// whose geometry kitmux can read.
-func (d *Daemon) forceSplits(tab *ktab) {
+// forceSplits switches the tab that holds a window to the splits layout, the
+// only one whose geometry kitmux can read. A failure is reported once per
+// tab.
+func (d *Daemon) forceSplits(windowID int) {
 	ctx, cancel := context.WithTimeout(d.ctx, kittyCallTimeout)
 	defer cancel()
-	err := d.kitty.GotoLayout(ctx, tab.id, kitty.LayoutSplits)
+	err := d.kitty.GotoLayout(ctx, windowID, kitty.LayoutSplits)
 	if err == nil {
 		d.scheduleReconcile()
 		return
 	}
-	if !d.warnedLayout[tab.id] {
-		d.warnedLayout[tab.id] = true
-		log.Error().Err(err).Int("tab", tab.id).Str("layout", tab.layout).
+	if !d.warnedLayout[windowID] {
+		d.warnedLayout[windowID] = true
+		log.Error().Err(err).Int("window", windowID).
 			Msg("kitmux tabs need kitty's splits layout; add it to enabled_layouts")
 	}
 }
