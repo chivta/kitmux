@@ -758,13 +758,16 @@ key_context() {
   window_vars "$1" && [[ -z $win_overlay ]]
 }
 
-# New tab key: opens a tmux window on the focused tab's target and focuses its
-# kitty tab once the control loop has created it.
+# New tab key: opens a tmux window in the home directory of the focused tab's
+# target and focuses its kitty tab once the control loop has created it. The
+# line's trailing -c "$HOME" stays unquoted so the target's own sh expands it
+# (the remote user's home over ssh).
 newtab_main() {
   local window tab
   local -i waited=0
   key_context "$1" || return 1
-  window=$(tmux_on "$win_target" new-window -d -P -F '#{window_id}' -t "=$win_session:") || return 1
+  shell_line tmux new-window -d -P -F '#{window_id}' -t "=$win_session:"
+  window=$(on_target "$win_target" "$REPLY"' -c "$HOME"') || return 1
   [[ $window == @<-> ]] || return 1
   while (( waited < NEWTAB_WAIT_CS )); do
     tab=$(kt ls 2>/dev/null | jq -r --arg t "$win_target" --arg w "$window" "$JQ_TAB_OF_WINDOW")
@@ -777,10 +780,15 @@ newtab_main() {
   done
 }
 
-# Split keys: $1 is h (side by side) or v (stacked), $2 the kitty window.
+# Split keys: $1 is h (side by side) or v (stacked), $2 the kitty window. The
+# new pane starts in the focused pane's directory. shell_line single-quotes the
+# format, so tmux (not sh) expands #{pane_current_path}. tmux expands it against
+# the current pane of the session the target resolves to, and a bare @id may
+# resolve to another tab's helper session, so the target names this tab's own
+# helper, whose current window is this tab's window.
 split_main() {
   [[ $1 == [hv] ]] && key_context "$2" || return 1
-  tmux_on "$win_target" split-window -$1 -t "$win_tmux"
+  tmux_on "$win_target" split-window -$1 -t "=${win_session}${HELPER_SEPARATOR}${win_tmux#@}:$win_tmux" -c '#{pane_current_path}'
 }
 
 # Pane focus keys: $1 is next or prev, $2 the kitty window.

@@ -38,9 +38,9 @@ The keys work only in kitmux tabs. Plain kitty tabs in the same instance keep yo
 
 | Action | macOS | Linux | What kitmux does |
 |---|---|---|---|
-| New tab | cmd+t | ctrl+shift+t | `new-window` on the focused tab's host, then focuses the new tab |
-| Split side by side | cmd+d | ctrl+shift+d | `split-window -h` in the tab's window |
-| Split stacked | cmd+shift+d | ctrl+alt+d | `split-window -v` |
+| New tab | cmd+t | ctrl+shift+t | `new-window -c "$HOME"` on the focused tab's host (the remote user's home for an SSH target), then focuses the new tab |
+| Split side by side | cmd+d | ctrl+shift+d | `split-window -h`, the new pane starting in the focused pane's directory |
+| Split stacked | cmd+shift+d | ctrl+alt+d | `split-window -v`, same directory |
 | Next / previous split | cmd+shift+right / cmd+shift+left | ctrl+shift+right / ctrl+shift+left | `select-pane -t :.+` / `:.-` |
 | Close split | cmd+w | ctrl+shift+w | asks `Kill tmux pane in <tab>? [y/N]`, then `kill-pane` on the active pane |
 | Close tab | not bound, see below | not bound | asks `Kill tmux window <tab>? [y/N]`, then `kill-window` |
