@@ -97,7 +97,6 @@ The plugin dir is the tmux global environment's `TMUX_PLUGIN_MANAGER_PATH`, whic
 - Tabs are sorted only in kitty's active OS window, because kitty's `move_tab_*` actions act on that window. Tabs dragged out into another OS window keep working but are not re-sorted.
 - A remote host that reboots while kitmux runs counts as the session ending there, so its tabs close. Run kitmux again once the host is back.
 - After a network drop, ssh notices after about 30 seconds (`ServerAliveInterval=10`, `ServerAliveCountMax=3`). Until then the remote tabs look frozen.
-- New panes on this Mac start in `$HOME` whatever directory tmux or resurrect asks for, because `~/.config/zsh/.zshrc` runs `cd ~`. Restored working directories show up only on the remote hosts.
 - If a target has no terminfo entry for kitty's `TERM`, the tab's client falls back to `xterm-256color`.
 - The Linux keys come from your linux.conf but were only tested on macOS.
 
