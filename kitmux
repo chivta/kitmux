@@ -621,8 +621,10 @@ bridge_main() {
 
   [[ -r $user_conf ]] && config+=(--config $user_conf)
   config+=(--config $OVERLAY_CONF)
+  # kitty sets KITTY_LISTEN_ON in windows (overlays included) but not for
+  # background processes, so the key alias passes the socket itself.
   kitty $config -o allow_remote_control=socket-only \
-    -o "action_alias=kitmux_bg launch --type=background -- ${(qq)SELF}" \
+    -o "action_alias=kitmux_bg launch --type=background --env ${(qq):-KITTY_LISTEN_ON=$kitty_sock} -- ${(qq)SELF}" \
     -o "action_alias=kitmux_overlay launch --type=overlay --var kitmux_overlay=1 -- ${(qq)SELF}" \
     --listen-on $kitty_sock $SELF _hold &
   kitty_pid=$!
