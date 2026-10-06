@@ -5,31 +5,6 @@ import (
 	"testing"
 )
 
-func TestVersionSupported(t *testing.T) {
-	cases := []struct {
-		version string
-		want    bool
-	}{
-		{"tmux 3.7c", true},
-		{"tmux 3.2", true},
-		{"tmux 3.2a", true},
-		{"tmux 3.1c", false},
-		{"tmux 2.9", false},
-		{"tmux 4.0", true},
-		{"tmux next-3.6", true},
-		{"tmux next-3.1", false},
-		{"tmux master", true},
-		{"tmux openbsd-7.5", true},
-		{"", false},
-	}
-	for _, tc := range cases {
-		got := versionSupported(tc.version)
-		if got != tc.want {
-			t.Errorf("versionSupported(%q) = %v, want %v", tc.version, got, tc.want)
-		}
-	}
-}
-
 func TestParsePrepared(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -58,10 +33,10 @@ func TestParsePrepared(t *testing.T) {
 			want:   Prepared{Version: "tmux 3.7c", State: StateCreated, ContinuumSave: "/opt/a=b/continuum_save.sh"},
 		},
 		{name: "no tmux", output: "error=no-tmux\n", wantErr: ErrNoTmux},
-		{name: "old tmux", output: "version=tmux 3.1c\nstate=ready\n", wantErr: ErrOldTmux},
+		{name: "old tmux", output: "version=tmux 3.1c\nerror=old-tmux\n", wantErr: ErrOldTmux},
 		{name: "new-session failed", output: "version=tmux 3.7c\nerror=new-session\ndetail=create window failed\n", wantErr: ErrSession},
 		{name: "unknown state", output: "version=tmux 3.7c\nstate=weird\n", wantErr: ErrSession},
-		{name: "empty output", output: "", wantErr: ErrOldTmux},
+		{name: "empty output", output: "", wantErr: ErrSession},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -83,7 +58,7 @@ func TestParsePrepared(t *testing.T) {
 }
 
 func TestErrorDetail(t *testing.T) {
-	_, err := parsePrepared("version=tmux 3.1c\nstate=ready\n")
+	_, err := parsePrepared("version=tmux 3.1c\nerror=old-tmux\n")
 	var detailed *Error
 	if !errors.As(err, &detailed) || detailed.Detail != "tmux 3.1c" {
 		t.Fatalf("err = %#v", err)

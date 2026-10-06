@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,7 +54,8 @@ const (
 	keyError     = "error"
 	keyDetail    = "detail"
 
-	scriptErrorNoTmux = "no-tmux"
+	scriptErrorNoTmux  = "no-tmux"
+	scriptErrorOldTmux = "old-tmux"
 )
 
 // Mode tells Prepare what to do when the session is not there.
@@ -99,8 +99,6 @@ var (
 	ErrOldTmux = errors.New("tmux too old")
 	// ErrSession means the session could not be listed or created.
 	ErrSession = errors.New("session unavailable")
-
-	versionPattern = regexp.MustCompile(`(\d+)\.(\d+)`)
 )
 
 // Error is one of the sentinel errors above plus a detail for the user: the
@@ -159,7 +157,7 @@ func (t Target) IsLocal() bool {
 // there, following mode. It returns an *Error for every failure a user can
 // act on.
 func (t Target) Prepare(ctx context.Context, mode Mode) (Prepared, error) {
-	cmd := t.command(ctx, []string{shBinary, "-s", "--", t.Session, t.Lang, string(mode)})
+	cmd := t.command(ctx, []string{shBinary, "-s", "--", t.Session, t.Lang, string(mode), strconv.Itoa(MinMajor), strconv.Itoa(MinMinor)})
 	cmd.Stdin = strings.NewReader(prepareScript)
 	var stdout bytes.Buffer
 	stderr := &limitedBuffer{limit: stderrLimit}
@@ -266,8 +264,11 @@ func parsePrepared(output string) (Prepared, error) {
 	}
 	scriptError, failed := values[keyError]
 	if failed {
-		if scriptError == scriptErrorNoTmux {
+		switch scriptError {
+		case scriptErrorNoTmux:
 			return Prepared{}, &Error{Kind: ErrNoTmux}
+		case scriptErrorOldTmux:
+			return Prepared{}, &Error{Kind: ErrOldTmux, Detail: values[keyVersion]}
 		}
 		return Prepared{}, &Error{Kind: ErrSession, Detail: scriptError + ": " + values[keyDetail]}
 	}
@@ -276,30 +277,11 @@ func parsePrepared(output string) (Prepared, error) {
 		State:         SessionState(values[keyState]),
 		ContinuumSave: values[keyContinuum],
 	}
-	if !versionSupported(prepared.Version) {
-		return Prepared{}, &Error{Kind: ErrOldTmux, Detail: prepared.Version}
-	}
 	switch prepared.State {
 	case StateReady, StateCreated, StateRestored, StateGone:
 		return prepared, nil
 	}
 	return Prepared{}, &Error{Kind: ErrSession, Detail: "unexpected reply: " + strings.TrimSpace(output)}
-}
-
-// versionSupported reports whether a `tmux -V` line names version
-// MinMajor.MinMinor or newer. A line without a number ("tmux master") is a
-// development build and is accepted.
-func versionSupported(version string) bool {
-	match := versionPattern.FindStringSubmatch(version)
-	if match == nil {
-		return version != ""
-	}
-	major, errMajor := strconv.Atoi(match[1])
-	minor, errMinor := strconv.Atoi(match[2])
-	if errMajor != nil || errMinor != nil {
-		return false
-	}
-	return major > MinMajor || (major == MinMajor && minor >= MinMinor)
 }
 
 // localEnv is the environment for local tmux commands: the daemon's own, with

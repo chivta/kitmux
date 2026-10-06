@@ -1,4 +1,5 @@
-# kitmux target preparation. Runs on the target as: sh -s -- SESSION LANG MODE
+# kitmux target preparation. Runs on the target as
+#   sh -s -- SESSION LANG MODE MIN_MAJOR MIN_MINOR
 # and prints key=value lines for kitmux to read. Only sh and tmux are needed.
 #
 # MODE decides what happens when the session is not there:
@@ -12,6 +13,8 @@ session=$1
 LANG=$2
 export LANG
 mode=$3
+min_major=$4
+min_minor=$5
 # kitmux may itself be started from inside tmux.
 unset TMUX TMUX_PANE
 
@@ -21,6 +24,18 @@ if [ -z "$version" ]; then
 	exit 0
 fi
 echo "version=$version"
+
+# Refuse an old tmux before touching anything. A version without numbers is a
+# development build ("tmux master") and passes.
+numbers=$(printf '%s\n' "$version" | sed -n 's/^[^0-9]*\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p')
+if [ -n "$numbers" ]; then
+	major=${numbers% *}
+	minor=${numbers#* }
+	if [ "$major" -lt "$min_major" ] || { [ "$major" -eq "$min_major" ] && [ "$minor" -lt "$min_minor" ]; }; then
+		echo "error=old-tmux"
+		exit 0
+	fi
+fi
 
 # Plugin scripts are looked up where TPM says they are, else in ~/.tmux/plugins.
 plugin_script() {
