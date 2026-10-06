@@ -116,8 +116,12 @@ echo ok
 '
 
 # sh -c script for a tab: $0 is the helper session target. Falls back to a
-# stock TERM when the target has no terminfo entry for kitty's.
-typeset -gr ATTACH_SCRIPT='infocmp "$TERM" >/dev/null 2>&1 || TERM=xterm-256color; export TERM; exec tmux attach-session -t "$0"'
+# stock TERM when the target has no terminfo entry for kitty's (on a tty,
+# every tmux command refuses an unknown TERM). Attaches only to a helper that
+# exists: attach-session starts a tmux server when none runs, and on a
+# rebooted host that server would load the config and let tmux-continuum
+# restore the session behind kitmux's back.
+typeset -gr ATTACH_SCRIPT='infocmp "$TERM" >/dev/null 2>&1 || TERM=xterm-256color; export TERM; tmux has-session -t "$0" 2>/dev/null || exit 1; exec tmux attach-session -t "$0"'
 
 # jq filter: the kitmux tab windows of one target ($t), one line each:
 # kitty tab id, kitty window id, tmux window id, sort key, tab title.
