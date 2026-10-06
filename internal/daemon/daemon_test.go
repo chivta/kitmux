@@ -70,3 +70,26 @@ func TestParsePaneID(t *testing.T) {
 		}
 	}
 }
+
+func TestNewWindowCommand(t *testing.T) {
+	cases := []struct{ session, home, want string }{
+		{"main", "/home/kit", "new-window -t '=main:' -P -F '#{window_id}' -c '/home/kit'"},
+		{"main", "/home/o'neil #1", `new-window -t '=main:' -P -F '#{window_id}' -c '/home/o'\''neil ##1'`},
+		{"main", "", "new-window -t '=main:' -P -F '#{window_id}'"},
+	}
+	for _, tc := range cases {
+		if got := newWindowCommand(tc.session, tc.home); got != tc.want {
+			t.Errorf("newWindowCommand(%q, %q) = %s, want %s", tc.session, tc.home, got, tc.want)
+		}
+	}
+	t.Logf("remote new tab: %s", newWindowCommand("work", "/home/deploy"))
+}
+
+func TestSplitWindowCommand(t *testing.T) {
+	if got, want := splitWindowCommand(4, false), "split-window -h -t %4 -c '#{pane_current_path}' -P -F '#{pane_id}'"; got != want {
+		t.Errorf("side by side = %s, want %s", got, want)
+	}
+	if got, want := splitWindowCommand(4, true), "split-window -v -t %4 -c '#{pane_current_path}' -P -F '#{pane_id}'"; got != want {
+		t.Errorf("stacked = %s, want %s", got, want)
+	}
+}

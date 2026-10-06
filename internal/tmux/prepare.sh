@@ -102,4 +102,5 @@ if [ "$state" != gone ]; then
 	save=$(plugin_script tmux-continuum/scripts/continuum_save.sh)
 	[ -f "$save" ] && echo "continuum=$save"
 fi
+[ -n "$HOME" ] && echo "home=$HOME"
 echo "state=$state"

@@ -3,6 +3,7 @@ package daemon
 import (
 	"bufio"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -145,7 +146,7 @@ func (d *Daemon) handleAction(req ipc.Request) ipc.Response {
 	case ipc.OpNewTab:
 		// The reply names the new window, so its tab can take the focus
 		// when it appears.
-		cmd := "new-window -t " + control.Quote("="+t.spec.Session+":") + " -P -F " + control.Quote("#{window_id}")
+		cmd := newWindowCommand(t.spec.Session, t.home)
 		conn.Send(cmd, func(replies []control.Reply, err error) {
 			id, created := replyID(replies, err)
 			d.events.post(func() {
@@ -156,11 +157,7 @@ func (d *Daemon) handleAction(req ipc.Request) ipc.Response {
 			})
 		})
 	case ipc.OpSplit:
-		direction := "-h"
-		if req.Stacked {
-			direction = "-v"
-		}
-		cmd := "split-window " + direction + " -t " + paneID(key.pane) + " -P -F " + control.Quote("#{pane_id}")
+		cmd := splitWindowCommand(key.pane, req.Stacked)
 		conn.Send(cmd, func(replies []control.Reply, err error) {
 			id, created := replyID(replies, err)
 			pane, valid := parsePaneID(id)
@@ -188,6 +185,28 @@ func (d *Daemon) handleAction(req ipc.Request) ipc.Response {
 		return ipc.Response{Code: ipc.CodeBadRequest}
 	}
 	return ipc.Response{OK: true}
+}
+
+// newWindowCommand opens a window that starts in the target user's home. The
+// control connection runs no shell, so home is the literal path the target
+// reported; tmux expands formats in -c, so a "#" in it is doubled. Without a
+// known home tmux uses the session's directory.
+func newWindowCommand(session, home string) string {
+	cmd := "new-window -t " + control.Quote("="+session+":") + " -P -F " + control.Quote("#{window_id}")
+	if home != "" {
+		cmd += " -c " + control.Quote(strings.ReplaceAll(home, "#", "##"))
+	}
+	return cmd
+}
+
+// splitWindowCommand splits pane beside (or, stacked, below) itself; the new
+// pane starts in the directory the pane is in now.
+func splitWindowCommand(pane int, stacked bool) string {
+	direction := "-h"
+	if stacked {
+		direction = "-v"
+	}
+	return "split-window " + direction + " -t " + paneID(pane) + " -c " + control.Quote("#{pane_current_path}") + " -P -F " + control.Quote("#{pane_id}")
 }
 
 // resolveWindow finds the pane a kitty window shows, looking at kitty again

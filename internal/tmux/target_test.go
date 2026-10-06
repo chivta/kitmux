@@ -18,6 +18,11 @@ func TestParsePrepared(t *testing.T) {
 			want:   Prepared{Version: "tmux 3.7c", State: StateReady, ContinuumSave: "/home/kit/.tmux/plugins/tmux-continuum/scripts/continuum_save.sh"},
 		},
 		{
+			name:   "home",
+			output: "version=tmux 3.7c\nhome=/home/kit\nstate=ready\n",
+			want:   Prepared{Version: "tmux 3.7c", State: StateReady, Home: "/home/kit"},
+		},
+		{
 			name:   "restored without continuum",
 			output: "version=tmux 3.4\nstate=restored\n",
 			want:   Prepared{Version: "tmux 3.4", State: StateRestored},

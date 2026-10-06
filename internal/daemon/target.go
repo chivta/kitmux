@@ -119,6 +119,9 @@ type target struct {
 	// continuumSave is tmux-continuum's save script on the target, empty
 	// when it is not installed.
 	continuumSave string
+	// home is the target user's home directory, where new tabs start.
+	// Empty when unknown; new tabs then start in the session's directory.
+	home string
 }
 
 // connHandler receives one control connection's output and notifications on
@@ -153,6 +156,7 @@ func (t *target) attach(prepared tmux.Prepared) error {
 	t.conn.Store(conn)
 	t.status = statusLive
 	t.continuumSave = prepared.ContinuumSave
+	t.home = prepared.Home
 	t.listed = false
 	t.listBusy = false
 	t.listDirty = false

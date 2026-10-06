@@ -21,9 +21,11 @@ type Op string
 const (
 	// OpPane registers a pane proxy; frames follow the request line.
 	OpPane Op = "pane"
-	// OpSplit splits the pane shown in a kitty window.
+	// OpSplit splits the pane shown in a kitty window; the new pane starts in
+	// that pane's current directory.
 	OpSplit Op = "split"
-	// OpNewTab opens a new tmux window on the target of a kitty window.
+	// OpNewTab opens a new tmux window, in the target user's home, on the target
+	// of a kitty window.
 	OpNewTab Op = "newtab"
 	// OpDescribe asks for the tab title of a kitty window, for the
 	// confirmation prompt.

@@ -51,6 +51,7 @@ const (
 	keyVersion   = "version"
 	keyState     = "state"
 	keyContinuum = "continuum"
+	keyHome      = "home"
 	keyError     = "error"
 	keyDetail    = "detail"
 
@@ -146,6 +147,9 @@ type Prepared struct {
 	// ContinuumSave is the path of tmux-continuum's save script on the
 	// target, empty when the plugin is not installed.
 	ContinuumSave string
+	// Home is the home directory of the target's user, empty when the
+	// target did not report one. New tabs start there.
+	Home string
 }
 
 // IsLocal reports whether the target is the machine kitmux runs on.
@@ -276,6 +280,7 @@ func parsePrepared(output string) (Prepared, error) {
 		Version:       values[keyVersion],
 		State:         SessionState(values[keyState]),
 		ContinuumSave: values[keyContinuum],
+		Home:          values[keyHome],
 	}
 	switch prepared.State {
 	case StateReady, StateCreated, StateRestored, StateGone:

@@ -52,9 +52,9 @@ These apply in kitmux windows only. Every binding is guarded with `map --when-fo
 
 | Action | macOS | Linux | What happens |
 |---|---|---|---|
-| New tab | cmd+t | ctrl+shift+t | `new-window` on the focused tab's target; the new tab gets the focus |
-| Split side by side | cmd+d | ctrl+shift+d | `split-window -h` of the focused pane; the new kitty window follows |
-| Split stacked | cmd+shift+d | ctrl+alt+d | `split-window -v` of the focused pane |
+| New tab | cmd+t | ctrl+shift+t | `new-window -c <home>` on the focused tab's target, so it starts in that target's home (the remote user's home over SSH); the new tab gets the focus |
+| Split side by side | cmd+d | ctrl+shift+d | `split-window -h` of the focused pane, starting in that pane's current directory; the new kitty window follows |
+| Split stacked | cmd+shift+d | ctrl+alt+d | `split-window -v` of the focused pane, starting in that pane's current directory |
 | Next / previous split | cmd+shift+right / left | ctrl+shift+right / left | kitty's own window switching, not remapped |
 | Close split | cmd+w | ctrl+shift+w | asks `Kill tmux pane in <tab title>? [y/N]`, then `kill-pane` |
 | Close tab | every key still bound to `close_tab` after your kitty.conf | same | asks `Kill tmux window <tab title>? [y/N]`, then `kill-window` |
