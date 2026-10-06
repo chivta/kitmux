@@ -151,8 +151,10 @@ func ParseState(line string) (PaneState, error) {
 // otherwise.
 func FullPaint(state PaneState, history, saved, visible [][]byte) []byte {
 	var b bytes.Buffer
-	b.WriteString(seqSyncBegin)
+	// The reset ends any synchronized update, so the new one starts after
+	// it.
 	b.WriteString(seqReset)
+	b.WriteString(seqSyncBegin)
 	b.WriteString(seqClearScrollback)
 	if state.HistorySize > 0 && len(history) > 0 {
 		writeLines(&b, history)

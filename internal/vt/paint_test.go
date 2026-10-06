@@ -68,7 +68,7 @@ func TestParseStateErrors(t *testing.T) {
 func TestFullPaintNormalScreen(t *testing.T) {
 	state := PaneState{Width: 10, Height: 3, HistorySize: 2, CursorX: 2, CursorY: 1, CursorVisible: true, Wrap: true, ScrollBottom: 2}
 	got := string(FullPaint(state, lines("old one", "old two   "), nil, lines("$ ls", "$ ", "")))
-	want := "\x1b[?2026h\x1bc\x1b[3J" +
+	want := "\x1bc\x1b[?2026h\x1b[3J" +
 		"old one\r\nold two\x1b[0m" + // history; padding trimmed
 		"\x1b[22J\x1b[H" + // push history into scrollback
 		"$ ls\r\n$\r\n\x1b[0m" + // visible rows
@@ -84,7 +84,7 @@ func TestFullPaintWithoutHistory(t *testing.T) {
 	// history; it must not be painted.
 	state := PaneState{Width: 10, Height: 2, CursorVisible: true, Wrap: true, ScrollBottom: 1}
 	got := string(FullPaint(state, lines("A"), nil, lines("A", "B")))
-	want := "\x1b[?2026h\x1bc\x1b[3J" + "A\r\nB\x1b[0m" + "\x1b[1;1H" + "\x1b[?2026l"
+	want := "\x1bc\x1b[?2026h\x1b[3J" + "A\r\nB\x1b[0m" + "\x1b[1;1H" + "\x1b[?2026l"
 	if got != want {
 		t.Fatalf("got  %q\nwant %q", got, want)
 	}
@@ -99,7 +99,7 @@ func TestFullPaintAlternateScreen(t *testing.T) {
 	state.SavedY = 1
 	state.ScrollTop, state.ScrollBottom = 0, 1
 	got := string(FullPaint(state, lines("h1"), lines("n1", "n2"), lines("ALT", "\x1b[7m rev ")))
-	want := "\x1b[?2026h\x1bc\x1b[3J" +
+	want := "\x1bc\x1b[?2026h\x1b[3J" +
 		"h1\x1b[0m\x1b[22J\x1b[H" +
 		"n1\r\nn2\x1b[0m" + // the normal screen under the alternate one
 		"\x1b[2;1H\x1b[?1049h\x1b[H" + // normal cursor, then switch
@@ -119,7 +119,7 @@ func TestFullPaintModes(t *testing.T) {
 		ScrollTop: 2, ScrollBottom: 3, CursorShape: "bar", CursorBlink: true,
 	}
 	got := string(FullPaint(state, nil, nil, lines("x")))
-	want := "\x1b[?2026h\x1bc\x1b[3J" + "x\x1b[0m" +
+	want := "\x1bc\x1b[?2026h\x1b[3J" + "x\x1b[0m" +
 		"\x1b[4h\x1b[?7l\x1b[?1002h\x1b[?1003h\x1b[?1005h\x1b[?25l\x1b[5 q" +
 		"\x1b[3;4r\x1b[?6h\x1b[2;2H" + // region, origin mode, cursor relative to the region
 		"\x1b[?2026l"
