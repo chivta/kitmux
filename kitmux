@@ -673,8 +673,10 @@ bridge_main() {
       fi
     done
     if (( ! alive && ! quit_sent )) && [[ ${loop_state[(I)ended]} != 0 ]]; then
+      # Not kitty's quit action: with confirm_os_window_close it asks first
+      # while a tab's client is still running. SIGTERM closes without asking.
       log "no session left on any target, closing kitty"
-      kt action quit 2>/dev/null
+      kill $kitty_pid 2>/dev/null
       quit_sent=1
     fi
     if [[ -s $runtime_dir/$SORT_FLAG ]] || (( EPOCHSECONDS - last_sort >= SORT_INTERVAL )); then
