@@ -463,6 +463,7 @@ func (d *Daemon) sendLayout(t *target, windowID string, state *syncState, cmds [
 	}
 	state.busy = true
 	generation := t.generation
+	log.Info().Str("target", t.spec.Name).Str("window", windowID).Str("layout", want).Int("swaps", len(cmds)-2).Msg("sending layout")
 	conn.Batch(cmds, func(replies []control.Reply, err error) {
 		d.events.post(func() {
 			if generation != t.generation {

@@ -75,7 +75,10 @@ func (c *Client) List(ctx context.Context) ([]OSWindow, error) {
 
 // Launch opens a window and returns its kitty id.
 func (c *Client) Launch(ctx context.Context, spec LaunchSpec) (int, error) {
-	args := []string{"launch", "--next-to", matchID(spec.NextTo)}
+	// Without --match, a remote launch goes to the active tab and ignores
+	// --next-to when that window sits in another tab; matching the tab of
+	// NextTo puts the window (or new tab) where it belongs.
+	args := []string{"launch", "--match", matchWindowTab(spec.NextTo), "--next-to", matchID(spec.NextTo)}
 	if spec.Tab {
 		args = append(args, "--type", typeTab, "--location", locationLastTab)
 		if spec.TabTitle != "" {
@@ -166,4 +169,10 @@ func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {
 // matchID builds the match expression for a window or tab id.
 func matchID(id int) string {
 	return "id:" + strconv.Itoa(id)
+}
+
+// matchWindowTab builds the tab match expression for the tab that holds a
+// window.
+func matchWindowTab(windowID int) string {
+	return "window_id:" + strconv.Itoa(windowID)
 }
