@@ -151,3 +151,35 @@ func TestRenderOverlayWithoutCloseTab(t *testing.T) {
 		}
 	}
 }
+
+func TestWithCloseTab(t *testing.T) {
+	keys := DefaultKeys("darwin").WithCloseTab([]string{"super+w", "shift+ctrl+q", "super+d"})
+	if strings.Join(keys.CloseTab, ",") != "shift+ctrl+q" {
+		t.Fatalf("CloseTab = %q", keys.CloseTab)
+	}
+	keys = DefaultKeys("linux").WithCloseTab([]string{"shift+ctrl+q", "shift+ctrl+w", "alt+ctrl+d"})
+	if strings.Join(keys.CloseTab, ",") != "shift+ctrl+q" {
+		t.Fatalf("CloseTab = %q", keys.CloseTab)
+	}
+	keys = DefaultKeys("darwin").WithCloseTab([]string{"cmd+shift+d", "command+t"})
+	if keys.CloseTab != nil {
+		t.Fatalf("CloseTab = %q", keys.CloseTab)
+	}
+	keys = DefaultKeys("darwin").WithCloseTab(nil)
+	if keys.CloseTab != nil {
+		t.Fatalf("CloseTab = %q", keys.CloseTab)
+	}
+}
+
+func TestKeySpecPattern(t *testing.T) {
+	for _, ok := range []string{"super+w", "shift+ctrl+q", "ctrl+shift+page_up", "f1", "super+/", "alt+`", "super+[", "ctrl+plus"} {
+		if !keySpecPattern.MatchString(ok) {
+			t.Errorf("%q should be accepted", ok)
+		}
+	}
+	for _, bad := range []string{"", "super+", "+w", "super+w launch rm", "SUPER+W", "a\nb"} {
+		if keySpecPattern.MatchString(bad) {
+			t.Errorf("%q should be rejected", bad)
+		}
+	}
+}
