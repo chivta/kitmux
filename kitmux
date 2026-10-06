@@ -65,7 +65,8 @@ typeset -gr HELPER_FORMAT='S #{window_id} #{session_name}'
 # POSIX sh run on a target (stdin of `sh -s -- MODE SESSION`) before a control
 # client attaches. MODE start: make sure SESSION exists, restoring a cold server
 # with tmux-resurrect, and remove helper sessions left by an earlier run.
-# MODE resume: only report whether SESSION still exists.
+# MODE resume: only report whether SESSION still exists; when it does not, also
+# remove the helpers, which would otherwise keep its windows alive.
 # Prints `gone`, `error <text>` or `ok`, preceded by `save <path>` when the
 # tmux-continuum save script exists.
 typeset -gr CONNECT_SCRIPT='
@@ -77,6 +78,14 @@ plugins_dir() {
   case $p in TMUX_PLUGIN_MANAGER_PATH=*) p=${p#TMUX_PLUGIN_MANAGER_PATH=} ;; *) p= ;; esac
   [ -n "$p" ] || p=$HOME/.tmux/plugins/
   printf %s "${p%/}"
+}
+drop_helpers() {
+  tmux list-sessions -F "#{session_name}" 2>/dev/null | while IFS= read -r name; do
+    rest=${name#"$session"__}
+    [ "$rest" != "$name" ] || continue
+    case $rest in ""|*[!0-9]*) continue ;; esac
+    tmux kill-session -t "=$name:" 2>/dev/null
+  done
 }
 new_session() {
   out=$(tmux new-session -d -s "$session" 2>&1) && return 0
@@ -99,17 +108,11 @@ if [ "$cold" = 1 ]; then
     tmux run-shell "$restore" >/dev/null 2>&1
   fi
 elif ! tmux has-session -t "=$session:" 2>/dev/null; then
-  [ "$mode" = start ] || { echo gone; exit 0; }
+  # SESSION was killed while its helpers still hold the windows: end them too.
+  [ "$mode" = start ] || { drop_helpers; echo gone; exit 0; }
   new_session
 fi
-if [ "$mode" = start ]; then
-  tmux list-sessions -F "#{session_name}" 2>/dev/null | while IFS= read -r name; do
-    rest=${name#"$session"__}
-    [ "$rest" != "$name" ] || continue
-    case $rest in ""|*[!0-9]*) continue ;; esac
-    tmux kill-session -t "=$name:" 2>/dev/null
-  done
-fi
+[ "$mode" = start ] && drop_helpers
 save=$(plugins_dir)/tmux-continuum/scripts/continuum_save.sh
 if [ -f "$save" ] && safe_path "$save"; then printf "save %s\n" "$save"; fi
 echo ok
