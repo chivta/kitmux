@@ -60,7 +60,12 @@ typeset -gri LOOP_SESSION_ENDED=0 LOOP_KITTY_GONE=3
 # Line formats for tmux listings read over the control channel. Names go last
 # because they may contain spaces.
 typeset -gr WINDOW_FORMAT='W #{window_id} #{window_index} #{window_name}'
-typeset -gr HELPER_FORMAT='S #{window_id} #{session_name}'
+typeset -gr HELPER_FORMAT='S #{window_id} #{session_id} #{session_name}'
+
+# tmux's built-in status-left, which names the session (the helper's own name in
+# a tab), and the replacement for helpers: the name of the mirrored session.
+typeset -gr DEFAULT_STATUS_LEFT='[#{session_name}] '
+typeset -gr HELPER_STATUS_LEFT='[#{session_group}] '
 
 # POSIX sh run on a target (stdin of `sh -s -- MODE SESSION`) before a control
 # client attaches. MODE start: make sure SESSION exists, restoring a cold server
@@ -207,6 +212,22 @@ tab_title() {
   [[ $target == $LOCAL_TARGET ]] || prefix=${target##*@}:
   clean_name "$3"
   REPLY=${prefix}tmux-${index}${REPLY:+ $REPLY}
+}
+
+# Succeeds when the control-mode line $1 is a %session-window-changed
+# notification, and sets REPLY to "SESSION_ID WINDOW_ID" (for example "$3 @7").
+parse_window_change() {
+  [[ $1 =~ '^%session-window-changed (\$[0-9]+) (@[0-9]+)$' ]] || return 1
+  REPLY="$match[1] $match[2]"
+}
+
+# Sets REPLY to the status-left a helper needs when the mirrored session's
+# status-left is $1: the helper form when $1 is tmux's default (which would show
+# the helper's name), empty when the user set their own, which the helper keeps
+# inheriting.
+helper_status_left() {
+  REPLY=
+  [[ $1 == $DEFAULT_STATUS_LEFT ]] && REPLY=$HELPER_STATUS_LEFT
 }
 
 # Sets REPLY to the fixed-width sort key of a tab: target position on the
@@ -356,7 +377,7 @@ ctl_close() {
 
 # Reads up to the end of the next command reply and collects its output lines
 # in reply. Returns 0 on %end, 1 on %error, 2 when the client is gone or stuck.
-# A notification seen on the way sets ctl_dirty: tmux changed, list again.
+# A notification seen on the way goes through note_event.
 ctl_reply() {
   local line number=
   local -i waited=0
@@ -374,7 +395,7 @@ ctl_reply() {
         case $line in
           ("%begin "*) number=${${(s: :)line}[3]} ;;
           ("%exit"*) return 2 ;;
-          (*) ctl_dirty=1 ;;
+          (*) note_event "$line" ;;
         esac
       fi
     else
@@ -384,6 +405,13 @@ ctl_reply() {
   done
 }
 
+# Records the control-mode notification $1: tmux changed, so list again, and a
+# %session-window-changed is queued in wc_changes for reconcile to act on.
+note_event() {
+  ctl_dirty=1
+  parse_window_change "$1" && wc_changes+=("$REPLY")
+}
+
 # Sends the tmux command $1 over the control channel; see ctl_reply.
 ctl_cmd() {
   print -r -u $ctl_out -- "$1" 2>/dev/null || return 2
@@ -391,33 +419,60 @@ ctl_cmd() {
 }
 
 # Creates the helper session $1 showing tmux window $2: grouped with the
-# session, no status line (kitty's tab bar replaces it), no tmux mouse, and a
-# bell only for its own window. A grouped session holds every window, and the
+# session, the normal tmux status line (naming the mirrored session, not the
+# helper, unless the user set their own status-left), no tmux mouse, and a bell
+# only for its own window. A grouped session holds every window, and the
 # default bell-action would ring this tab for a bell in any of them.
 make_helper() {
+  local -a current
   ctl_cmd "new-session -d -t '=$session:' -s '$1'"
-  ctl_cmd "set-option -t '=$1:' status off"
+  if ctl_cmd "show-options -Av -t '=$session:' status-left"; then
+    current=("${reply[@]}")
+    helper_status_left "${(F)current}"
+    [[ -n $REPLY ]] && ctl_cmd "set-option -t '=$1:' status-left '$REPLY'"
+  fi
   ctl_cmd "set-option -t '=$1:' mouse off"
   ctl_cmd "set-option -t '=$1:' bell-action current"
   ctl_cmd "select-window -t '=$1:$2'"
 }
 
+# Focuses the kitty tab of tmux window $2 on target $1. Fails when there is no
+# such tab (yet).
+focus_window_tab() {
+  local tab
+  tab=$(kt ls 2>/dev/null | jq -r --arg t "$1" --arg w "$2" "$JQ_TAB_OF_WINDOW")
+  [[ -n $tab ]] && kt focus-tab --match "id:$tab"
+}
+
 # Brings kitty in line with tmux for this target: one helper session and one
 # tab per window, current titles and sort keys, no helpers for dead windows.
+# A helper whose current window changed because someone switched windows in its
+# tab (next-window, a window number, the window tree, new-window) puts the tab
+# back on its own window and focuses the tab of the window that was selected.
 # Returns 1 when the control channel failed, LOOP_KITTY_GONE without kitty.
 reconcile() {
-  local line tag window index name helper title order listing ktab kwin
-  local -a windows keep_focus
-  local -A helper_window tab_of kwin_of order_of title_of live
+  local line tag window index name helper title order listing ktab kwin sid event switch_to=
+  local -a windows keep_focus events
+  local -A helper_window helper_of_sid tab_of kwin_of order_of title_of live switched
   local -i changed=0 focused=0 active_position=1
 
   ctl_cmd "list-windows -t '=$session:' -F '$WINDOW_FORMAT'" || return 1
   windows=("${reply[@]}")
   ctl_cmd "list-sessions -F '$HELPER_FORMAT'" || return 1
   ctl_dirty=0   # anything tmux reports from here on is newer than these listings
+  events=("${wc_changes[@]}")
+  wc_changes=()
   for line in "${reply[@]}"; do
-    IFS=' ' read -r tag window name <<< "$line"
-    [[ $tag == S && $name == ${session}${HELPER_SEPARATOR}<-> ]] && helper_window[$name]=$window
+    IFS=' ' read -r tag window sid name <<< "$line"
+    if [[ $tag == S && $name == ${session}${HELPER_SEPARATOR}<-> ]]; then
+      helper_window[$name]=$window
+      helper_of_sid[$sid]=$name
+    fi
+  done
+  # Only a window change tmux reported counts as a switch: tmux also moves a
+  # helper to another window by itself (swap, renumber), which is no focus request.
+  for event in $events; do
+    [[ -n $helper_of_sid[${event%% *}] ]] && switched[$helper_of_sid[${event%% *}]]=1
   done
 
   listing=$(kt ls 2>/dev/null) || return $LOOP_KITTY_GONE
@@ -444,6 +499,7 @@ reconcile() {
       # tmux keeps a grouped session's current window by index, so a swap, a
       # renumber or a kill elsewhere moves this tab off its window. So does
       # next-window typed in the tab. Put it back.
+      (( ${+switched[$helper]} )) && switch_to=$helper_window[$helper]
       ctl_cmd "select-window -t '=$helper:$window'"
     fi
     tab_title "$target" $index "$name"
@@ -472,6 +528,8 @@ reconcile() {
     fi
   done
 
+  (( ${+live[$switch_to]} )) && focus_window_tab $target $switch_to
+
   for helper in "${(@k)helper_window}"; do
     # The tab's client exits with its session, and the tab closes after it.
     (( ${+live[@${helper##*${HELPER_SEPARATOR}}]} )) || ctl_cmd "kill-session -t '=$helper:'"
@@ -492,7 +550,8 @@ serve() {
     reconcile || return $?
     if (( EPOCHSECONDS >= next_save )); then
       next_save=$(( EPOCHSECONDS + CONTINUUM_TICK ))
-      # continuum only saves from a drawn status line; kitmux tabs have none.
+      # The tabs' status lines now run continuum's own save too; the tick stays
+      # so saves go on when the user's status line does not run it.
       [[ -n $save_script ]] && { ctl_cmd "run-shell -b '$save_script'" || return 1 }
     fi
     if (( ! ctl_dirty )); then
@@ -501,9 +560,11 @@ serve() {
         continue
       fi
       [[ $line == "%exit"* ]] && return 1
+      note_event "$line"
     fi
     while IFS= read -r -t $BURST_QUIET -u $ctl_in line; do
       [[ $line == "%exit"* ]] && return 1
+      note_event "$line"
     done
   done
 }
@@ -511,12 +572,12 @@ serve() {
 # Removes this target's helper sessions when kitmux stops, so only the user's
 # session is left on the server. Best effort: needs a live control channel.
 drop_helpers() {
-  local line tag window name
+  local line tag window sid name
   local -a helpers
   [[ -n ${ctl_pid:-} ]] || return 0
   ctl_cmd "list-sessions -F '$HELPER_FORMAT'" || return 0
   for line in "${reply[@]}"; do
-    IFS=' ' read -r tag window name <<< "$line"
+    IFS=' ' read -r tag window sid name <<< "$line"
     [[ $tag == S && $name == ${session}${HELPER_SEPARATOR}<-> ]] && helpers+=($name)
   done
   for name in $helpers; do
@@ -530,6 +591,7 @@ drop_helpers() {
 loop_main() {
   typeset -g target_index=$1 target=$2 save_script= ctl_pid=
   typeset -gi ctl_dirty=0 stop=0
+  typeset -ga wc_changes=()   # session-window-changed notifications not yet acted on
   local report line
   local -a lines
   local -i rc delay=$RECONNECT_MIN started
@@ -763,18 +825,14 @@ key_context() {
 # line's trailing -c "$HOME" stays unquoted so the target's own sh expands it
 # (the remote user's home over ssh).
 newtab_main() {
-  local window tab
+  local window
   local -i waited=0
   key_context "$1" || return 1
   shell_line tmux new-window -d -P -F '#{window_id}' -t "=$win_session:"
   window=$(on_target "$win_target" "$REPLY"' -c "$HOME"') || return 1
   [[ $window == @<-> ]] || return 1
   while (( waited < NEWTAB_WAIT_CS )); do
-    tab=$(kt ls 2>/dev/null | jq -r --arg t "$win_target" --arg w "$window" "$JQ_TAB_OF_WINDOW")
-    if [[ -n $tab ]]; then
-      kt focus-tab --match "id:$tab"
-      return
-    fi
+    focus_window_tab $win_target $window && return
     zselect -t $NEWTAB_POLL_CS
     waited+=$NEWTAB_POLL_CS
   done

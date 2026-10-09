@@ -143,6 +143,20 @@ check_sort "1 - 2" 2 - 1
 check_sort "a1 a2 b1 b2 -" b1 a2 b2 a1 -
 check_sort "1 1 2" 2 1 1
 
+# --- helper status line and window change notifications ---
+helper_status_left '[#{session_name}] '
+check "default status-left becomes the helper form" '[#{session_group}] ' "$REPLY"
+helper_status_left 'U:#{session_name} '
+check "user status-left is left alone" '' "$REPLY"
+helper_status_left ''
+check "empty status-left is left alone" '' "$REPLY"
+parse_window_change '%session-window-changed $3 @12'
+check "window change notification" '$3 @12' "$REPLY"
+check_status "window change notification, status" yes parse_window_change '%session-window-changed $0 @0'
+check_status "other notification is no window change" no parse_window_change '%window-renamed @1 vim'
+check_status "client window change is no session change" no parse_window_change '%session-changed $1 main'
+check_status "window change with extra text" no parse_window_change '%session-window-changed $3 @12 x'
+
 # --- command lines for a target ---
 tmux_lang=en_US.UTF-8
 shell_line tmux -C attach-session -t '=main'

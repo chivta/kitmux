@@ -1,6 +1,6 @@
 # kitmux (split-keys)
 
-kitmux opens one kitty OS window with one tab per window of a tmux session, on your machine and on SSH hosts. This branch is the `split-keys` variant, a zsh script. Each kitty tab runs a tmux client that shows one tmux window. tmux draws the panes, and kitty's split, close and new-tab keys send tmux commands. The `split-native` branch is the other variant, a Go binary that turns every tmux pane into its own kitty window.
+kitmux opens one kitty OS window with one tab per window of a tmux session, on your machine and on SSH hosts. This branch is the `split-keys` variant, a zsh script. Each kitty tab runs a tmux client that shows one tmux window with your normal tmux status bar. tmux draws the panes, and kitty's split, close and new-tab keys send tmux commands. Your tmux prefix keys work in every tab too. The `split-native` branch is the other variant, a Go binary that turns every tmux pane into its own kitty window.
 
 ## Install
 
@@ -50,6 +50,10 @@ The questions open in a kitty overlay over the tab. Only `y` or `Y` kills. Any o
 
 kitty 0.48 binds `close_tab` to kitty_mod+q, plus cmd+w on macOS. Your kitty.conf rebinds both (kitty_mod+q to `goto_tab -1`, cmd+w to `close_window_with_confirmation`), so no close tab key is left for kitmux to take over. To get one, uncomment the template line in `kitmux.conf` and pick a chord.
 
+### tmux prefix keys
+
+Each tab is a real tmux client, so your prefix reaches tmux and everything bound after it works, with the status bar showing the windows of the mirrored session. The window-switching keys behave like kitty tabs. When a tab's client changes window, for example with `<prefix> n`, `<prefix> p`, `<prefix> <digit>`, `<prefix> w` or `<prefix> c` (which creates a window and selects it), kitmux focuses the kitty tab of the window that was selected, creating the tab first for a new window, and puts the helper back on the window of its own tab. Every tab keeps showing its own window. Prompt-based keys such as `<prefix> ,` (rename window) work in the status line, and the tab title follows the new name.
+
 ## tmux.conf
 
 kitmux leaves server-wide tmux options alone. Two lines help, both in the global config of each target:
@@ -67,7 +71,7 @@ Your own tmux.conf already has `allow-passthrough on`. It needs only the hook li
 
 ## How a tab works
 
-For each tmux window, kitmux creates a helper session grouped with SESSION, named `SESSION__<window id>` (window `@7` gets `main__7`). The helper has `status off` (kitty's tab bar replaces the status line), `mouse off`, `bell-action current`, and the tab's window selected. Grouped sessions share their windows, so a window or pane you create from any client shows up in SESSION and in every tab. One tmux control-mode client per target (`tmux -C attach -f no-output,ignore-size`) reports changes, and kitmux re-lists windows on every notification and every 2 seconds.
+For each tmux window, kitmux creates a helper session grouped with SESSION, named `SESSION__<window id>` (window `@7` gets `main__7`). The helper has `mouse off`, `bell-action current`, and the tab's window selected. Its status bar is your normal one, and its `status-left` is `[#{session_group}] ` so it names the mirrored session (`main`) instead of the helper (`main__3`). The helper gets that `status-left` only when the session's `status-left` is tmux's default, so a `status-left` you set yourself is left alone (use `#{session_group}` in it for the session name). Grouped sessions share their windows, so a window or pane you create from any client shows up in SESSION and in every tab. One tmux control-mode client per target (`tmux -C attach -f no-output,ignore-size`) reports changes, and kitmux re-lists windows on every notification and every 2 seconds. When a helper's current window changes, tmux sends `%session-window-changed` to that client, and kitmux treats it as a request to focus the tab of the new window. A helper that tmux moved by itself (swap, renumber) is put back without moving focus.
 
 The tab's client reconnects when the network drops, showing `kitmux: reconnecting to <host>`, and exits for good once its helper or window is gone. kitmux deletes its helpers when it stops and also removes leftovers from an earlier run when it starts.
 
@@ -81,7 +85,7 @@ Programs can also set kitty user vars from inside tmux with an OSC 1337 `SetUser
 
 kitmux works with tmux-resurrect and tmux-continuum.
 
-- continuum saves from the status line, and kitmux tabs have none. kitmux runs continuum's `continuum_save.sh` with `tmux run-shell -b` every 60 seconds per target, and continuum keeps its own `@continuum-save-interval`.
+- continuum saves from the status line, and kitmux tabs now have one, so continuum's own auto-save runs from them. kitmux still runs continuum's `continuum_save.sh` with `tmux run-shell -b` every 60 seconds per target, and continuum keeps its own `@continuum-save-interval`. Both can save, so a save may run twice in a short time.
 - resurrect writes empty save files without a UTF-8 locale. kitmux runs every tmux command with your `LANG`, or `en_US.UTF-8` when `LANG` is unset.
 - After a reboot, run `kitmux` again. On a target with no tmux server it runs `tmux new-session -d -s SESSION` (continuum may already restore SESSION while the server loads its config) and then resurrect's `restore.sh` through `tmux run-shell`. It never runs `restore.sh` against a server that was already running.
 - resurrect brings back windows with their index, name and working directory, pane layouts, and programs on its process list (vim, less, man and so on). The tabs come back with the same titles and order.
@@ -93,6 +97,7 @@ The plugin dir is the tmux global environment's `TMUX_PLUGIN_MANAGER_PATH`, whic
 
 - Session-scoped tmux commands typed inside a tab act on that tab's helper session. `move-window -r` is the visible case: tmux 3.7c renumbers only the helper and leaves SESSION and the tab titles as they were. Use `move-window -r -t main:` instead.
 - kitty has close paths kitmux cannot remap: middle click on a tab and the macOS menu item Close Tab. kitmux reopens a kitmux tab closed this way within about 2 seconds, at the same position. Focus stays on whatever tab kitty picked after the close.
+- Each tab's status bar takes one row. A tab's client that switches to another session (`<prefix> s`, or a window listed under another session in `<prefix> w`) stays there, and kitmux does not move it back. The trees also list kitmux's helper sessions; pick windows under the tab's own session.
 - kitty's own scrollback in a kitmux tab holds nothing useful, because the tmux client redraws the screen. Use the scrollback key.
 - Tabs are sorted only in kitty's active OS window, because kitty's `move_tab_*` actions act on that window. Tabs dragged out into another OS window keep working but are not re-sorted.
 - A remote host that reboots while kitmux runs counts as the session ending there, so its tabs close. Run kitmux again once the host is back.
