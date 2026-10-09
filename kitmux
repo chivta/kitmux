@@ -14,7 +14,7 @@
 #   kitmux _tab       runs in every kitty tab: the reconnecting tmux client
 #   kitmux _hold      first kitty window of a run's OS window, shown until the
 #                     first tab exists
-#   kitmux _newtab, _split, _pane, _confirm, _scrollback   key actions
+#   kitmux _newtab, _split, _pane, _confirm, _scrollback, _copylast   key actions
 
 emulate -R zsh
 setopt extended_glob no_equals pipe_fail
@@ -51,6 +51,13 @@ typeset -gri RECONNECT_MIN=1 RECONNECT_MAX=15    # backoff bounds in seconds
 typeset -gri LOOP_RESTART_DELAY=2                # seconds before restarting a crashed loop
 typeset -gri NEWTAB_WAIT_CS=500                  # how long _newtab waits for its tab, centiseconds
 typeset -gri NEWTAB_POLL_CS=5
+# Copy-last-output key. COPYLAST_POS is a tmux format for the absolute line
+# number (0 = oldest history line) of the copy-mode cursor.
+typeset -gr COPYLAST_POS='#{e|-:#{e|+:#{history_size},#{copy_cursor_y}},#{scroll_position}}'
+typeset -gr COPYLAST_BUFFER=kitmux-copy          # tmux buffer holding the text until it is piped out, never one of the user's
+typeset -gr COPYLAST_NO_MARKS='no OSC 133 marks'
+typeset -gr COPYLAST_NO_OUTPUT='last command printed nothing'
+typeset -gr COPYLAST_FAILED='copy of last output failed (tmux 3.5+ needed)'
 typeset -gri ORDER_TARGET_DIGITS=4 ORDER_INDEX_DIGITS=10
 
 # Exit statuses of a control loop, read by the bridge.
@@ -988,6 +995,80 @@ scrollback_main() {
   tmux_on "$win_target" capture-pane -p -e -J -S - -t "$win_tmux" | less -R +G
 }
 
+# Decides what the copy-last-output key does with the cursor lines of its probe
+# (see copylast_main). $1 is where previous-prompt -o landed, the output start
+# of the last command that has one; $2 the first prompt mark after it; $3 the
+# first prompt mark after that. Prints ok, nomarks or empty.
+#   $2 <= $1   nothing found: no marks, or only the prompt of a running command
+#   $3 != $2   the prompt after $1 is not the current one, so the last command
+#              printed nothing (tmux keeps no output mark for it) and $1 belongs
+#              to an earlier command
+copylast_verdict() {
+  local -i out=$1 next=$2 after=$3
+  if (( next <= out )); then
+    print nomarks
+  elif (( after != next )); then
+    print empty
+  else
+    print ok
+  fi
+}
+
+# Copy-last-output key: copies the output of the last command of the tab's
+# active pane, found through the OSC 133 marks the shell emits inside tmux. The
+# probe enters copy mode and prints the cursor line after previous-prompt -o and
+# two next-prompt, then copylast_verdict decides. Only an ok verdict selects
+# from the output start to the line above the next prompt and runs
+# copy-selection-and-cancel, which leaves copy mode, renames the new buffer to
+# COPYLAST_BUFFER, reads it from the target and pipes it into the local
+# clipboard tool (pbcopy on macOS, wl-copy elsewhere), then deletes it. That
+# works for ssh targets without OSC 52, and the user's own buffers stay as they
+# were. Otherwise copy mode is left and display-message says why. A pane already
+# in copy mode is reset first. Like _split, it names the tab's own helper
+# session.
+copylast_main() {
+  local pane out verdict message client
+  local -i rc
+  local -a lines
+  local clipboard_cmd=wl-copy
+  [[ $OSTYPE == darwin* ]] && clipboard_cmd=pbcopy
+  key_context "$1" || return 1
+  pane="=${win_session}${HELPER_SEPARATOR}${win_tmux#@}:$win_tmux"
+  tmux_on "$win_target" send-keys -X -t "$pane" cancel &>/dev/null
+  out=$(tmux_on "$win_target" copy-mode -t "$pane" \; \
+    send-keys -X -t "$pane" history-bottom \; \
+    send-keys -X -t "$pane" previous-prompt -o \; display-message -p -t "$pane" $COPYLAST_POS \; \
+    send-keys -X -t "$pane" next-prompt \; display-message -p -t "$pane" $COPYLAST_POS \; \
+    send-keys -X -t "$pane" next-prompt \; display-message -p -t "$pane" $COPYLAST_POS 2>&1)
+  rc=$?
+  lines=("${(@f)out}")
+  if (( rc == 0 && $#lines == 3 )) && [[ ${(j::)lines} == <-> ]]; then
+    verdict=$(copylast_verdict $lines)
+  else
+    verdict=failed
+  fi
+  case $verdict in
+    (ok)
+      tmux_on "$win_target" send-keys -X -t "$pane" history-bottom \; \
+        send-keys -X -t "$pane" previous-prompt -o \; send-keys -X -t "$pane" begin-selection \; \
+        send-keys -X -t "$pane" next-prompt \; send-keys -X -t "$pane" cursor-up \; \
+        send-keys -X -t "$pane" end-of-line \; send-keys -X -t "$pane" copy-selection-and-cancel \; \
+        set-buffer -n $COPYLAST_BUFFER &&
+        tmux_on "$win_target" show-buffer -b $COPYLAST_BUFFER | ${=clipboard_cmd}
+      rc=$?
+      tmux_on "$win_target" delete-buffer -b $COPYLAST_BUFFER &>/dev/null
+      (( rc == 0 )) && return
+      message=$COPYLAST_FAILED ;;
+    (nomarks) message=$COPYLAST_NO_MARKS ;;
+    (empty) message=$COPYLAST_NO_OUTPUT ;;
+    (*) message=$COPYLAST_FAILED ;;
+  esac
+  tmux_on "$win_target" send-keys -X -t "$pane" cancel &>/dev/null
+  # Run from outside a client, display-message needs the tab's client named.
+  client=$(tmux_on "$win_target" list-clients -t "=${win_session}${HELPER_SEPARATOR}${win_tmux#@}:" -F '#{client_name}' 2>/dev/null)
+  tmux_on "$win_target" display-message -c "${client%%$'\n'*}" "$message"
+}
+
 # --- launcher -----------------------------------------------------------------
 
 # Prints the usage text.
@@ -1134,6 +1215,7 @@ main() {
     (_pane) pane_main "$2" "$3" ;;
     (_confirm) confirm_main "$2" "$3" ;;
     (_scrollback) scrollback_main "$2" ;;
+    (_copylast) copylast_main "$2" ;;
     (*) launcher_main "$@" ;;
   esac
 }

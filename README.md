@@ -47,10 +47,32 @@ The keys work only in kitmux tabs. Plain kitty tabs in the same instance keep yo
 | Close split | cmd+w | ctrl+shift+w | asks `Kill tmux pane in <tab>? [y/N]`, then `kill-pane` on the active pane |
 | Close tab | not bound, see below | not bound | asks `Kill tmux window <tab>? [y/N]`, then `kill-window` |
 | Scrollback | cmd+h | ctrl+shift+h | the active pane's full history (`capture-pane -p -e -J -S -`) in `less -R +G` |
+| Copy last output | cmd+shift+c | ctrl+shift+y | copies the output of the last command of the active pane to the local clipboard, see [Shell setup](#shell-setup) |
 
 The questions open in a kitty overlay over the tab. Only `y` or `Y` kills. Any other key, Esc, or closing the overlay (cmd+w inside it) cancels. kitmux sends the kill to tmux and never closes a kitty tab itself. The tab closes when tmux reports the window gone. Closing the last pane of a window with the close split key therefore closes the tab too.
 
 kitty 0.48 binds `close_tab` to kitty_mod+q, plus cmd+w on macOS. Your kitty.conf rebinds both (kitty_mod+q to `goto_tab -1`, cmd+w to `close_window_with_confirmation`), so no close tab key is left for kitmux to take over. To get one, uncomment the template line in `kitmux.conf` and pick a chord.
+
+### Copy last output
+
+The key replaces kitty's `@last_cmd_output` copy (cmd+shift+c on macOS, ctrl+shift+y on Linux in the user's config) in kitmux tabs only, because kitty sees no shell marks inside a tmux client. kitmux enters copy mode on the active pane, jumps to the start of the last command's output with `previous-prompt -o`, selects to the line above the next prompt mark, and runs `copy-selection-and-cancel`, which leaves copy mode. It renames the new tmux buffer to `kitmux-copy`, reads it with `show-buffer -b kitmux-copy` on the tab's target, pipes it into the local `pbcopy` (macOS) or `wl-copy` (other systems), and deletes the buffer. SSH targets work the same way, the text travels over the existing ssh channel, and your own tmux buffers stay as they were. A pane already in copy mode is reset first.
+
+When the last command printed nothing, kitmux copies nothing and shows `last command printed nothing` in the tab's status line. When the pane has no marks, or the command is still running, it shows `no OSC 133 marks`. The clipboard keeps its old content in both cases. The key needs tmux 3.5 or newer on the target (`previous-prompt -o`), and `wl-copy` on Linux.
+
+### Shell setup
+
+The shell inside tmux, on every target including SSH hosts, must emit OSC 133 `A` (start of the prompt) and `C` (start of the command's output). tmux records them as line marks. The `A` mark has to be written as part of the prompt string. A mark printed from a precmd hook is erased by zsh's line editor, which clears to the end of the screen before it draws the prompt, and kitmux then finds no prompts. For zsh, put this after your prompt is set:
+
+```zsh
+if [[ -n $TMUX ]]; then
+    _osc133_prompt() { [[ $PROMPT == *$'\e]133;A'* ]] || PROMPT=$'%{\e]133;A\e\\%}'$PROMPT }
+    _osc133_output() { print -n '\e]133;C\e\\' }
+    precmd_functions+=(_osc133_prompt)
+    preexec_functions+=(_osc133_output)
+fi
+```
+
+Add `_osc133_prompt` to `precmd_functions` after the function that builds `PROMPT`, so it sees the final string.
 
 ### tmux prefix keys
 
@@ -107,7 +129,8 @@ The plugin dir is the tmux global environment's `TMUX_PLUGIN_MANAGER_PATH`, whic
 - A remote host that reboots while kitmux runs counts as the session ending there, so its tabs close. Run kitmux again once the host is back.
 - After a network drop, ssh notices after about 30 seconds (`ServerAliveInterval=10`, `ServerAliveCountMax=3`). Until then the remote tabs look frozen.
 - If a target has no terminfo entry for kitty's `TERM`, the tab's client falls back to `xterm-256color`.
-- The Linux keys come from your linux.conf but were only tested on macOS.
+- The Linux keys come from your linux.conf but were only tested on macOS, `wl-copy` included.
+- Copy last output finds a command's output only through OSC 133 marks. A command that printed nothing is detected, and an empty Enter at the prompt counts as a command with no output.
 
 ## Tests
 
