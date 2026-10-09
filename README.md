@@ -1,6 +1,6 @@
 # kitmux (split-keys)
 
-kitmux opens one kitty OS window with one tab per window of a tmux session, on your machine and on SSH hosts. This branch is the `split-keys` variant, a zsh script. Each kitty tab runs a tmux client that shows one tmux window with your normal tmux status bar. tmux draws the panes, and kitty's split, close and new-tab keys send tmux commands. Your tmux prefix keys work in every tab too. The `split-native` branch is the other variant, a Go binary that turns every tmux pane into its own kitty window.
+kitmux opens one kitty OS window with one tab per window of a tmux session, on your machine and on SSH hosts. Every run opens its OS window in one shared kitty process, so macOS treats all kitmux windows as one app and cmd+` cycles through them. This branch is the `split-keys` variant, a zsh script. Each kitty tab runs a tmux client that shows one tmux window with your normal tmux status bar. tmux draws the panes, and kitty's split, close and new-tab keys send tmux commands. Your tmux prefix keys work in every tab too. The `split-native` branch is the other variant, a Go binary that turns every tmux pane into its own kitty window.
 
 ## Install
 
@@ -24,13 +24,15 @@ kitmux -s work me@build.example # session "work" on build.example
 
 A TARGET is `local` or an SSH destination (`user@host`, `host`, or an ssh_config alias). SESSION defaults to `main` and applies to every target. kitmux creates SESSION on a target where it doesn't exist.
 
-The launcher starts a dedicated kitty instance and a background bridge, then gives your prompt back. The bridge logs to `${XDG_STATE_HOME:-$HOME/.local/state}/kitmux/kitmux.log` and stops when that kitty exits.
+The launcher starts a background bridge, which opens a new OS window in the shared kitty process, then gives your prompt back. The first run starts that process (`kitty --single-instance --instance-group kitmux-<n> --listen-on ...`, with your kitty.conf and `kitmux.conf`), and later runs only add an OS window to it. The process is dedicated to kitmux and separate from any kitty you started yourself. Its socket lives in `${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/kitmux-<uid>/kitty.sock`, a fixed location that no single run owns. The bridge logs to `${XDG_STATE_HOME:-$HOME/.local/state}/kitmux/kitmux.log`.
+
+Each run's bridge manages only the tabs of its own OS window and stops when that window closes. Closing one OS window detaches only that run, and the other windows keep working. Run `kitmux` again for a session that already has a window and kitmux focuses that window and exits 0 instead of opening a duplicate (two windows would fight over the same helper sessions). Mixing is allowed across sessions: `kitmux` and `kitmux -s other` give two OS windows in one process. A run that asks for several targets where only some already have a window for that session fails with a message.
 
 `KITMUX_SSH` replaces the ssh command, split on whitespace, for example `KITMUX_SSH="ssh -F ~/test/ssh_config" kitmux devbox`. All commands for one host share an SSH master (`ControlPath=~/.ssh/kitmux-%C`, kept 10 minutes after the last use).
 
-Tabs are titled `tmux-<index> <name>` for local windows and `<host>:tmux-<index> <name>` for remote ones, `user@` dropped. They follow the targets in command line order, then the tmux window index. tmux is the source of truth. A new, renamed, moved, swapped, renumbered or killed window shows up in kitty within about 2 seconds. When SESSION ends on a target, its tabs close. When no target has SESSION left, kitty closes.
+Tabs are titled `tmux-<index> <name>` for local windows and `<host>:tmux-<index> <name>` for remote ones, `user@` dropped. They follow the targets in command line order, then the tmux window index. tmux is the source of truth. A new, renamed, moved, swapped, renumbered or killed window shows up in kitty within about 2 seconds. When SESSION ends on a target, its tabs close. When no target has SESSION left, the run's OS window closes without asking, and the other windows stay.
 
-Closing the kitty window or quitting kitty only detaches. tmux keeps every window and pane. kitty may ask before closing, because each tab runs a program (the tmux client).
+Closing an OS window only detaches that run, and quitting kitty detaches every run. tmux keeps every window and pane. kitty may ask before closing, because each tab runs a program (the tmux client). Whether kitty itself quits after its last window closes follows your kitty.conf (`macos_quit_when_last_window_closed`). If it stays running, the next run reuses it.
 
 ## Keys
 
@@ -99,7 +101,9 @@ The plugin dir is the tmux global environment's `TMUX_PLUGIN_MANAGER_PATH`, whic
 - kitty has close paths kitmux cannot remap: middle click on a tab and the macOS menu item Close Tab. kitmux reopens a kitmux tab closed this way within about 2 seconds, at the same position. Focus stays on whatever tab kitty picked after the close.
 - Each tab's status bar takes one row. A tab's client that switches to another session (`<prefix> s`, or a window listed under another session in `<prefix> w`) stays there, and kitmux does not move it back. The trees also list kitmux's helper sessions; pick windows under the tab's own session.
 - kitty's own scrollback in a kitmux tab holds nothing useful, because the tmux client redraws the screen. Use the scrollback key.
-- Tabs are sorted only in kitty's active OS window, because kitty's `move_tab_*` actions act on that window. Tabs dragged out into another OS window keep working but are not re-sorted.
+- kitty's `move_tab_*` and `goto_tab` actions act only on its active OS window. A run sorts its tabs only while its OS window is the active one and catches up when it becomes so. A tab opened in a window that is not the active one stays that window's active tab, instead of switching back to the tab that was. Tabs dragged out into another OS window keep working but are not re-sorted.
+- All runs share one kitty process, so its config (`kitty.conf`, `kitmux.conf`, the key aliases) comes from the run that started it. Quit that kitty to pick up changes.
+- Two runs for the same session on one target are refused, and so is a run that overlaps another run's session on some but not all of its targets. A bridge killed with SIGKILL leaves an OS window nothing manages. kitmux ignores its tabs when it looks for an open window.
 - A remote host that reboots while kitmux runs counts as the session ending there, so its tabs close. Run kitmux again once the host is back.
 - After a network drop, ssh notices after about 30 seconds (`ServerAliveInterval=10`, `ServerAliveCountMax=3`). Until then the remote tabs look frozen.
 - If a target has no terminfo entry for kitty's `TERM`, the tab's client falls back to `xterm-256color`.

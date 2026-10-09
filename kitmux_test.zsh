@@ -26,6 +26,11 @@ check_status() {
   check "$label" $expected $actual
 }
 
+# Succeeds when string $1 matches the regex $2.
+matches() {
+  [[ $1 =~ $2 ]]
+}
+
 # Succeeds when string $1 sorts before string $2.
 sorts_before() {
   [[ $1 < $2 ]]
@@ -156,6 +161,26 @@ check_status "window change notification, status" yes parse_window_change '%sess
 check_status "other notification is no window change" no parse_window_change '%window-renamed @1 vim'
 check_status "client window change is no session change" no parse_window_change '%session-changed $1 main'
 check_status "window change with extra text" no parse_window_change '%session-window-changed $3 @12 x'
+
+# --- shared kitty process ---
+instance_group_for /tmp/a/kitmux-501
+first=$REPLY
+instance_group_for /tmp/a/kitmux-501
+check "instance group is stable" "$first" "$REPLY"
+instance_group_for /tmp/b/kitmux-501
+check_status "instance group differs per runtime dir" no [ "$first" = "$REPLY" ]
+check_status "instance group is a plain word" yes matches $first '^kitmux-[0-9]+$'
+
+open_lines=("local main 4" "local other 9" "dev main 12")
+find_open_tab main local $open_lines
+check "open tab of main on local" 4 "$REPLY"
+find_open_tab main dev $open_lines
+check "open tab of main on dev" 12 "$REPLY"
+find_open_tab other local $open_lines
+check "open tab of other on local" 9 "$REPLY"
+check_status "no open tab of other on dev" no find_open_tab other dev $open_lines
+check_status "no open tab without lines" no find_open_tab main local
+check_status "session name is matched whole" no find_open_tab mai local $open_lines
 
 # --- command lines for a target ---
 tmux_lang=en_US.UTF-8

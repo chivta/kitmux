@@ -8,10 +8,12 @@
 #
 # Process layout:
 #   kitmux            launcher: validates, prepares each target, starts the bridge
-#   kitmux _bridge    background supervisor: owns the kitty instance, sorts tabs
+#   kitmux _bridge    background supervisor of one run: opens its OS window in the
+#                     shared kitty process (the first run starts it), sorts tabs
 #   (loop_main)       one forked control loop per target, a tmux -C client
 #   kitmux _tab       runs in every kitty tab: the reconnecting tmux client
-#   kitmux _hold      first kitty window, shown until the first tab exists
+#   kitmux _hold      first kitty window of a run's OS window, shown until the
+#                     first tab exists
 #   kitmux _newtab, _split, _pane, _confirm, _scrollback   key actions
 
 emulate -R zsh
@@ -32,10 +34,11 @@ typeset -gr HELPER_SEPARATOR=__                  # helper session = SESSION__<wi
 typeset -gri MIN_TMUX_MAJOR=3 MIN_TMUX_MINOR=2
 typeset -gri SSH_ERROR_STATUS=255                # ssh's own exit status for transport failures
 
-typeset -gr RUNTIME_PARENT=kitmux-$UID           # holds one runtime dir per kitty instance
+typeset -gr RUNTIME_PARENT=kitmux-$UID           # stable per-user dir: the shared kitty's socket and the runs' sort flags
 typeset -gr SOCKET_NAME=kitty.sock
 typeset -gri SOCKET_PATH_MAX=100                 # macOS limit for unix socket paths is 104
-typeset -gr SORT_FLAG=sort                       # file in the runtime dir: non-empty when a loop wants a re-sort
+typeset -gr SORT_FLAG_PREFIX=sort                # sort.<bridge pid> in the runtime dir: non-empty when a loop wants a re-sort
+typeset -gr INSTANCE_GROUP_PREFIX=kitmux         # kitty --instance-group = prefix-<checksum of the runtime dir>
 typeset -gri KITTY_START_TIMEOUT=10              # seconds to wait for kitty's socket
 typeset -gri TICK_CS=20                          # bridge supervision tick, centiseconds
 typeset -gri SORT_INTERVAL=2                     # seconds between unconditional re-sorts
@@ -131,24 +134,43 @@ echo ok
 # restore the session behind kitmux's back.
 typeset -gr ATTACH_SCRIPT='infocmp "$TERM" >/dev/null 2>&1 || TERM=xterm-256color; export TERM; tmux has-session -t "$0" 2>/dev/null || exit 1; exec tmux attach-session -t "$0"'
 
-# jq filter: the kitmux tab windows of one target ($t), one line each:
-# kitty tab id, kitty window id, tmux window id, sort key, tab title.
+# jq filter: the kitmux tab windows of one target ($t) in OS window $o, one line
+# each: kitty tab id, kitty window id, tmux window id, sort key, tab title.
 typeset -gr JQ_TARGET_TABS='
-.[] | .tabs[] | . as $tab | .windows[]
+.[] | select(.id == $o) | .tabs[] | . as $tab | .windows[]
 | select(.user_vars.kitmux_target == $t and (.user_vars.kitmux_window // "") != "" and (.user_vars.kitmux_overlay // "") == "")
 | "\($tab.id) \(.id) \(.user_vars.kitmux_window) \(.user_vars.kitmux_order // "-") \($tab.title)"'
 
-# jq filter: the tabs of the active OS window in tab bar order, one line each:
-# tab id, 1 if it is the active tab, and the sort key of its kitmux window
-# ("-" for other tabs). kitty's goto_tab and move_tab_* act on that OS window.
-typeset -gr JQ_ACTIVE_OS_TABS='
-.[] | select(.is_active) | .tabs[]
+# jq filter: the tabs of OS window $o in tab bar order, one line each: tab id,
+# 1 if it is the active tab, and the sort key of its kitmux window ("-" for
+# other tabs).
+typeset -gr JQ_OS_TABS='
+.[] | select(.id == $o) | .tabs[]
 | "\(.id) \(if .is_active then 1 else 0 end) \([.windows[] | select((.user_vars.kitmux_window // "") != "" and (.user_vars.kitmux_overlay // "") == "") | .user_vars.kitmux_order // empty][0] // "-")"'
 
-# jq filter: for the active OS window, 1 if it has the OS focus (else 0) and
-# the 1-based position of its active tab.
-typeset -gr JQ_FOCUS_STATE='
-.[] | select(.is_active) | "\(if .is_focused then 1 else 0 end) \(([.tabs[].is_active] | index(true) // 0) + 1)"'
+# jq filter: the state of OS window $o, one line, nothing when it is gone: 1 if
+# it has the OS focus (else 0), 1 if it is kitty's active OS window (the one
+# goto_tab and move_tab_* act on), the 1-based position of its active tab, and
+# the id of a kitty window in it (a kitmux tab window when there is one).
+typeset -gr JQ_OS_STATE='
+.[] | select(.id == $o)
+| ([.tabs[].windows[] | select((.user_vars.kitmux_window // "") != "" and (.user_vars.kitmux_overlay // "") == "") | .id][0] // .tabs[0].windows[0].id) as $anchor
+| "\(if .is_focused then 1 else 0 end) \(if .is_active then 1 else 0 end) \(([.tabs[].is_active] | index(true) // 0) + 1) \($anchor)"'
+
+# jq filter: the id of the OS window holding a window tagged with run $r.
+typeset -gr JQ_OS_OF_RUN='
+[.[] | select(any(.tabs[].windows[]; .user_vars.kitmux_run == $r)) | .id][0] // empty'
+
+# jq filter: the ids of all tabs of OS window $o.
+typeset -gr JQ_OS_TAB_IDS='
+.[] | select(.id == $o) | .tabs[].id'
+
+# jq filter: every kitmux tab window, one line each: run (bridge pid), target,
+# session, kitty tab id.
+typeset -gr JQ_OPEN_TABS='
+.[] | .tabs[] | . as $tab | .windows[]
+| select((.user_vars.kitmux_window // "") != "" and (.user_vars.kitmux_overlay // "") == "")
+| "\(.user_vars.kitmux_run // 0) \(.user_vars.kitmux_target) \(.user_vars.kitmux_session) \($tab.id)"'
 
 # jq filter: the kitmux vars of the only window in the listing, one per line:
 # target, tmux window id, session, overlay flag, tab title.
@@ -160,9 +182,9 @@ typeset -gr JQ_WINDOW_VARS='
 typeset -gr JQ_TAB_OF_WINDOW='
 [.[] | .tabs[] | select(any(.windows[]; .user_vars.kitmux_target == $t and .user_vars.kitmux_window == $w and (.user_vars.kitmux_overlay // "") == "")) | .id][0] // empty'
 
-# jq filter: tab id of the kitmux tab that sorts first.
+# jq filter: tab id of the kitmux tab of OS window $o that sorts first.
 typeset -gr JQ_FIRST_TAB='
-[.[] | .tabs[] | {id, order: ([.windows[] | .user_vars.kitmux_order // empty][0])} | select(.order != null)] | sort_by(.order) | .[0].id // empty'
+[.[] | select(.id == $o) | .tabs[] | {id, order: ([.windows[] | .user_vars.kitmux_order // empty][0])} | select(.order != null)] | sort_by(.order) | .[0].id // empty'
 
 # --- small helpers ------------------------------------------------------------
 
@@ -276,13 +298,25 @@ sort_plan() {
   done
 }
 
-# Removes the runtime dir $1 the launcher created: the files kitty and kitmux
-# put there, then the directory. Not recursive, and only for a dir kitmux owns.
-remove_runtime_dir() {
-  local dir=$1
-  [[ -n $dir && $dir == */$RUNTIME_PARENT/[A-Za-z0-9]## && -d $dir && -O $dir ]] || return 1
-  rm -f -- "$dir/$SOCKET_NAME" "$dir/$SORT_FLAG"
-  rmdir -- "$dir"
+# Sets REPLY to the kitty instance group for runtime dir $1. Every kitmux run
+# that uses the same dir joins the same kitty process, and a run with another dir
+# (another user, or a different TMPDIR) never touches it.
+instance_group_for() {
+  local sum
+  sum=$(cksum <<< "$1") || return 1
+  REPLY=$INSTANCE_GROUP_PREFIX-${sum%% *}
+}
+
+# Succeeds when one of the lines "TARGET SESSION TAB" after the first two args
+# shows session $1 of target $2, and sets REPLY to that line's kitty tab id.
+find_open_tab() {
+  local session=$1 target=$2 line t s tab
+  shift 2
+  for line in "$@"; do
+    IFS=' ' read -r t s tab <<< "$line"
+    [[ $t == $target && $s == $session ]] && { REPLY=$tab; return 0 }
+  done
+  return 1
 }
 
 # --- running commands on a target ---------------------------------------------
@@ -336,6 +370,34 @@ connect_target() {
 # Runs a kitty remote control command against this instance's socket.
 kt() {
   kitten @ --to "$kitty_sock" "$@"
+}
+
+# Reads this run's OS window (os_window) from the kt ls listing $1 and sets
+# os_focused, os_active, os_position and os_anchor, see JQ_OS_STATE. Fails when
+# the OS window is gone.
+os_state() {
+  local line
+  typeset -g os_focused os_active os_position os_anchor
+  line=$(jq -r --argjson o $os_window "$JQ_OS_STATE" <<< "$1") || return 1
+  [[ -n $line ]] || return 1
+  IFS=' ' read -r os_focused os_active os_position os_anchor <<< "$line"
+}
+
+# Sets REPLY to the id of the OS window holding the windows of run $1, empty
+# while the run has none.
+os_window_of_run() {
+  REPLY=$(kt ls 2>/dev/null | jq -r --arg r "$1" "$JQ_OS_OF_RUN")
+  [[ -n $REPLY ]]
+}
+
+# Closes every tab of this run's OS window, which closes the window. Remote
+# control does not ask for confirmation, unlike kitty's own close and quit
+# actions, which ask while a tab's client is still running.
+close_os_window() {
+  local tab
+  for tab in ${(f)"$(kt ls 2>/dev/null | jq -r --argjson o $os_window "$JQ_OS_TAB_IDS")"}; do
+    kt close-tab --match "id:$tab"
+  done
 }
 
 # Looks up the kitmux user vars of kitty window $1 and sets win_target,
@@ -444,17 +506,25 @@ focus_window_tab() {
   [[ -n $tab ]] && kt focus-tab --match "id:$tab"
 }
 
+# After a failed kitty command: LOOP_KITTY_GONE when this run's OS window is
+# gone, else 1 so that the control loop starts over with a fresh listing.
+kitty_failure() {
+  os_state "$(kt ls 2>/dev/null)" && return 1
+  return $LOOP_KITTY_GONE
+}
+
 # Brings kitty in line with tmux for this target: one helper session and one
 # tab per window, current titles and sort keys, no helpers for dead windows.
 # A helper whose current window changed because someone switched windows in its
 # tab (next-window, a window number, the window tree, new-window) puts the tab
 # back on its own window and focuses the tab of the window that was selected.
-# Returns 1 when the control channel failed, LOOP_KITTY_GONE without kitty.
+# Only the tabs of this run's OS window count. Returns 1 when the control
+# channel failed, LOOP_KITTY_GONE when kitty or this run's OS window is gone.
 reconcile() {
   local line tag window index name helper title order listing ktab kwin sid event switch_to=
   local -a windows keep_focus events
   local -A helper_window helper_of_sid tab_of kwin_of order_of title_of live switched
-  local -i changed=0 focused=0 active_position=1
+  local -i changed=0
 
   ctl_cmd "list-windows -t '=$session:' -F '$WINDOW_FORMAT'" || return 1
   windows=("${reply[@]}")
@@ -476,9 +546,8 @@ reconcile() {
   done
 
   listing=$(kt ls 2>/dev/null) || return $LOOP_KITTY_GONE
-  IFS=' ' read -r focused active_position <<< "$(jq -r "$JQ_FOCUS_STATE" <<< "$listing")"
-  (( active_position )) || active_position=1
-  listing=$(jq -r --arg t "$target" "$JQ_TARGET_TABS" <<< "$listing")
+  os_state "$listing" || return $LOOP_KITTY_GONE
+  listing=$(jq -r --arg t "$target" --argjson o $os_window "$JQ_TARGET_TABS" <<< "$listing")
   for line in "${(@f)listing}"; do
     [[ -n $line ]] || continue
     IFS=' ' read -r ktab kwin window order title <<< "$line"
@@ -509,14 +578,19 @@ reconcile() {
     if (( ! ${+tab_of[$window]} )); then
       # --keep-focus raises the OS window, which would pull kitty in front of
       # whatever app the user is in. Without OS focus, let the new tab become
-      # active and switch back to the tab that was.
+      # active and switch back to the tab that was. goto_tab only reaches kitty's
+      # active OS window, so in another one the new tab stays active.
+      # --match with a window of this run's OS window puts the tab there
+      # (--next-to is ignored for tabs); the new tab's window is the anchor
+      # for the next one.
       keep_focus=()
-      (( focused )) && keep_focus=(--keep-focus)
-      kt launch --type=tab $keep_focus --tab-title "$title" \
+      (( os_focused )) && keep_focus=(--keep-focus)
+      os_anchor=$(kt launch --type=tab --match "window_id:$os_anchor" $keep_focus --tab-title "$title" \
         --var "kitmux_target=$target" --var "kitmux_window=$window" \
         --var "kitmux_session=$session" --var "kitmux_order=$order" \
-        "$SELF" _tab "$session" "$target" "$window" >/dev/null || return $LOOP_KITTY_GONE
-      (( focused )) || kt action goto_tab $active_position
+        --var "kitmux_run=$bridge_run" \
+        "$SELF" _tab "$session" "$target" "$window") || { kitty_failure; return }
+      (( os_focused || ! os_active )) || kt action goto_tab $os_position
       log "$target: opened tab for $window ($title)"
       changed=1
     else
@@ -535,7 +609,7 @@ reconcile() {
     (( ${+live[@${helper##*${HELPER_SEPARATOR}}]} )) || ctl_cmd "kill-session -t '=$helper:'"
   done
 
-  (( changed )) && print 1 >> "$runtime_dir/$SORT_FLAG"
+  (( changed )) && print 1 >> $sort_flag
   return 0
 }
 
@@ -586,8 +660,9 @@ drop_helpers() {
 }
 
 # Control loop for one target. Args: position on the command line, target.
-# Uses the globals session, runtime_dir and kitty_sock. Reconnects until the
-# session ends (exit LOOP_SESSION_ENDED) or kitty goes away.
+# Uses the globals session, bridge_run, os_window, sort_flag and kitty_sock.
+# Reconnects until the session ends (exit LOOP_SESSION_ENDED) or kitty or this
+# run's OS window goes away (exit LOOP_KITTY_GONE).
 loop_main() {
   typeset -g target_index=$1 target=$2 save_script= ctl_pid=
   typeset -gi ctl_dirty=0 stop=0
@@ -642,15 +717,20 @@ loop_main() {
 
 # --- bridge (background supervisor) -------------------------------------------
 
-# Puts the kitmux tabs of the active OS window in sort-key order, leaving other
-# tabs where they are. kitty can only move the active tab, so each move first
-# switches to the tab with goto_tab (focus-tab would raise the OS window), and
-# the tab that was active is switched back to at the end.
+# Puts the kitmux tabs of this run's OS window in sort-key order, leaving other
+# tabs where they are. kitty can only move the active tab of its active OS
+# window, so a run whose OS window is not the active one sorts once it becomes
+# so. Each move first switches to the tab with goto_tab (focus-tab would raise
+# the OS window), and the tab that was active is switched back to at the end.
+# Fails when kitty or the OS window is gone.
 sort_tabs() {
   local listing line tab active key move active_tab=
   local -a tabs keys
   local -i from to
-  listing=$(kt ls 2>/dev/null | jq -r "$JQ_ACTIVE_OS_TABS") || return 0
+  listing=$(kt ls 2>/dev/null) || return 1
+  os_state "$listing" || return 1
+  (( os_active )) || return 0
+  listing=$(jq -r --argjson o $os_window "$JQ_OS_TABS" <<< "$listing") || return 0
   for line in "${(@f)listing}"; do
     [[ -n $line ]] || continue
     IFS=' ' read -r tab active key <<< "$line"
@@ -669,17 +749,22 @@ sort_tabs() {
     tabs=($tabs[1,to-1] $tab $tabs[to,from-1] $tabs[from+1,-1])
   done
   [[ -n $active_tab ]] && kt action goto_tab ${tabs[(i)$active_tab]}
+  return 0
 }
 
-# Runs in the background for the life of one kitty instance. Args: runtime
-# dir, session, targets. Starts kitty and one control loop per target, keeps
-# the tabs sorted, and cleans up when kitty exits. Quits kitty once every
-# target's session has ended.
+# Runs in the background for the life of one kitmux run. Args: runtime dir,
+# session, targets. Opens an OS window in the shared kitty process (starting the
+# process when this is the first run), starts one control loop per target, keeps
+# the tabs of its own OS window sorted, and stops when that OS window is gone.
+# Closes the OS window once every target's session has ended. Other runs' OS
+# windows and the kitty process itself are left alone.
 bridge_main() {
-  typeset -g runtime_dir=$1 session=$2
+  typeset -g runtime_dir=$1 session=$2 bridge_run=$$ os_window
   shift 2
+  typeset -g sort_flag=$runtime_dir/$SORT_FLAG_PREFIX.$bridge_run
   local -a targets loop_pids loop_state config
-  local -i i kitty_pid waited=0 last_sort=0 quit_sent=0 rc alive
+  local group
+  local -i i kitty_pid waited=0 last_sort=0 quit_sent=0 rc alive launcher_rc=-1
   local user_conf=${KITTY_CONFIG_DIRECTORY:-$HOME/.config/kitty}/kitty.conf
   targets=("$@")
   typeset -g kitty_sock=unix:$runtime_dir/$SOCKET_NAME
@@ -687,35 +772,50 @@ bridge_main() {
   # A kitmux started from inside another kitty must not hand that context on.
   unset KITTY_WINDOW_ID KITTY_PID KITTY_LISTEN_ON KITTY_PUBLIC_KEY
   init_target_env
+  instance_group_for $runtime_dir || { log "cannot compute the kitty instance group"; return 1 }
+  group=$REPLY
 
   [[ -r $user_conf ]] && config+=(--config $user_conf)
   config+=(--config $OVERLAY_CONF)
-  # kitty sets KITTY_LISTEN_ON in windows (overlays included) but not for
-  # background processes, so the key alias passes the socket itself.
+  # A socket left by a kitty that died would stop the next one from listening.
+  [[ -S $runtime_dir/$SOCKET_NAME ]] && ! kt ls >/dev/null 2>&1 && rm -f -- $runtime_dir/$SOCKET_NAME
+  # With --single-instance the first run becomes the shared kitty process and
+  # stays in this job. A later run only asks that process for a new OS window
+  # and exits at once (its config options are then ignored). kitty sets
+  # KITTY_LISTEN_ON in windows (overlays included) but not for background
+  # processes, so the key alias passes the socket itself. Both aliases hold
+  # nothing that belongs to one run, so they work in every OS window.
   kitty $config -o allow_remote_control=socket-only \
     -o "action_alias=kitmux_bg launch --type=background --env ${(qq):-KITTY_LISTEN_ON=$kitty_sock} -- ${(qq)SELF}" \
     -o "action_alias=kitmux_overlay launch --type=overlay --var kitmux_overlay=1 -- ${(qq)SELF}" \
-    --listen-on $kitty_sock $SELF _hold &
+    --single-instance --instance-group $group --listen-on $kitty_sock $SELF _hold $bridge_run &
   kitty_pid=$!
-  log "started kitty $kitty_pid for session $session on: $targets"
-  until [[ -S $runtime_dir/$SOCKET_NAME ]]; do
-    if ! kill -0 $kitty_pid 2>/dev/null || (( (waited += TICK_CS) > KITTY_START_TIMEOUT * 100 )); then
-      log "kitty did not open its socket"
-      kill $kitty_pid 2>/dev/null
-      remove_runtime_dir $runtime_dir
+  log "started kitty client $kitty_pid for session $session on: $targets"
+  # The window _hold opens tags itself with this run's id, which finds the OS window.
+  until os_window_of_run $bridge_run; do
+    if (( launcher_rc < 0 )) && ! kill -0 $kitty_pid 2>/dev/null; then
+      wait $kitty_pid
+      launcher_rc=$?
+      (( launcher_rc == 0 )) || { log "kitty failed with status $launcher_rc"; rm -f -- $sort_flag; return 1 }
+    fi
+    if (( (waited += TICK_CS) > KITTY_START_TIMEOUT * 100 )); then
+      log "kitty did not open a window"
+      rm -f -- $sort_flag
       return 1
     fi
     zselect -t $TICK_CS
   done
+  os_window=$REPLY
+  log "OS window $os_window"
 
-  trap 'kill $loop_pids 2>/dev/null; wait $loop_pids 2>/dev/null; remove_runtime_dir $runtime_dir; exit 0' TERM INT
+  trap 'kill $loop_pids 2>/dev/null; wait $loop_pids 2>/dev/null; rm -f -- $sort_flag; exit 0' TERM INT
   for (( i = 1; i <= $#targets; i++ )); do
     loop_main $((i - 1)) $targets[i] &
     loop_pids[i]=${!}   # zsh 5.9 stores a bare $! literally in an array element
     loop_state[i]=running
   done
 
-  while kill -0 $kitty_pid 2>/dev/null; do
+  while true; do
     alive=0
     for (( i = 1; i <= $#targets; i++ )); do
       [[ $loop_state[i] == running ]] || continue
@@ -738,44 +838,46 @@ bridge_main() {
       fi
     done
     if (( ! alive && ! quit_sent )) && [[ ${loop_state[(I)ended]} != 0 ]]; then
-      # Not kitty's quit action: with confirm_os_window_close it asks first
-      # while a tab's client is still running. SIGTERM closes without asking.
-      log "no session left on any target, closing kitty"
-      kill $kitty_pid 2>/dev/null
+      log "no session left on any target, closing the OS window"
+      close_os_window
       quit_sent=1
     fi
-    if [[ -s $runtime_dir/$SORT_FLAG ]] || (( EPOCHSECONDS - last_sort >= SORT_INTERVAL )); then
-      : > $runtime_dir/$SORT_FLAG
+    if [[ -s $sort_flag ]] || (( EPOCHSECONDS - last_sort >= SORT_INTERVAL )); then
+      : > $sort_flag
       last_sort=$EPOCHSECONDS
-      sort_tabs
+      sort_tabs || break
     fi
     zselect -t $TICK_CS
   done
 
-  log "kitty exited, stopping"
+  log "OS window $os_window is gone, stopping"
   kill $loop_pids 2>/dev/null
   wait $loop_pids 2>/dev/null
-  remove_runtime_dir $runtime_dir
+  rm -f -- $sort_flag
 }
 
 # --- commands kitty runs ------------------------------------------------------
 
-# First window of the kitty instance: a notice that stays until the first
-# kitmux tab exists, then focuses the tab that sorts first and exits.
-# focus-tab also raises the OS window, which is wanted here and only here:
-# kitmux was just started, and macOS may have left the new kitty in the back.
+# First window of a run's OS window: a notice that stays until the first
+# kitmux tab exists in that OS window, then focuses the tab that sorts first and
+# exits. Arg: the run's id (the bridge pid), which it stamps on its own window so
+# the bridge finds the OS window. focus-tab also raises the OS window, which is
+# wanted here and only here: the user just started kitmux, and macOS may have
+# left the new window in the back.
 hold_main() {
-  local first
+  local first os
   typeset -g kitty_sock=$KITTY_LISTEN_ON
   print -r -- "kitmux: opening tmux windows..."
+  kt set-user-vars --match "id:$KITTY_WINDOW_ID" "kitmux_run=$1"
+  os=$(kt ls --match "id:$KITTY_WINDOW_ID" | jq -r '.[0].id')
   while true; do
-    first=$(kt ls 2>/dev/null | jq -r "$JQ_FIRST_TAB")
+    first=$(kt ls 2>/dev/null | jq -r --argjson o $os "$JQ_FIRST_TAB")
     [[ -n $first ]] && break
     zselect -t $TICK_CS
   done
   # Give the control loops a moment to open the rest before choosing.
   zselect -t $TICK_CS
-  first=$(kt ls 2>/dev/null | jq -r "$JQ_FIRST_TAB")
+  first=$(kt ls 2>/dev/null | jq -r --argjson o $os "$JQ_FIRST_TAB")
   [[ -n $first ]] && kt focus-tab --match "id:$first"
 }
 
@@ -892,9 +994,11 @@ scrollback_main() {
 usage() {
   print -r -- "usage: kitmux [-s SESSION] [TARGET...]
 
-Opens a kitty window with one tab per window of tmux session SESSION
+Opens a kitty OS window with one tab per window of tmux session SESSION
 (default: $DEFAULT_SESSION) on each TARGET. A TARGET is '$LOCAL_TARGET' or an ssh
-destination; no TARGET means '$LOCAL_TARGET'.
+destination; no TARGET means '$LOCAL_TARGET'. Every run opens its own OS window
+in one shared kitty process. When a window for SESSION on the TARGETs is
+already open, kitmux focuses it instead.
 
 Environment: KITMUX_SSH overrides the ssh command, e.g. \"ssh -F /path/config\"."
 }
@@ -918,10 +1022,48 @@ start_target() {
   [[ $lines[-1] == ok ]] || die "$target: ${lines[-1]#error }"
 }
 
-# Entry point of `kitmux [-s SESSION] [TARGET...]`: validates, prepares every
-# target, starts the bridge in the background and returns.
+# Sets runtime_dir and kitty_sock to the stable per-user location shared by every
+# run, and creates the dir. Dies when it cannot be used.
+init_runtime_dir() {
+  local base=${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}
+  typeset -g runtime_dir=${base%/}/$RUNTIME_PARENT
+  mkdir -p -m 700 -- $runtime_dir && [[ -O $runtime_dir ]] || die "cannot use runtime dir $runtime_dir"
+  (( ${#runtime_dir} + 1 + ${#SOCKET_NAME} < SOCKET_PATH_MAX )) ||
+    die "runtime dir $runtime_dir is too long for a unix socket path"
+  typeset -g kitty_sock=unix:$runtime_dir/$SOCKET_NAME
+}
+
+# Looks for a window of a running kitmux that already shows session $1 of one
+# of the targets $2... in the shared kitty process. Focuses it and succeeds when
+# it covers every target, dies when it covers only some (their helper sessions
+# would clash), fails when there is none.
+focus_open_window() {
+  local session=$1 target line run t s tab first=
+  local -a open_lines found
+  shift
+  for line in "${(@f)$(kt ls 2>/dev/null | jq -r "$JQ_OPEN_TABS")}"; do
+    [[ -n $line ]] || continue
+    IFS=' ' read -r run t s tab <<< "$line"
+    # A run that died leaves tabs nobody manages; they do not count.
+    [[ $run == <1-> ]] && kill -0 $run 2>/dev/null && open_lines+=("$t $s $tab")
+  done
+  for target in "$@"; do
+    find_open_tab $session $target "${open_lines[@]}" || continue
+    found+=($target)
+    [[ -n $first ]] || first=$REPLY
+  done
+  (( $#found )) || return 1
+  (( $#found == $# )) ||
+    die "session $session is already open for ${(j:, :)found}, so it cannot also open for ${(j:, :)@}"
+  kt focus-tab --match "id:$first"
+  print -r -- "kitmux: session $session is already open, focused its window"
+}
+
+# Entry point of `kitmux [-s SESSION] [TARGET...]`: validates, focuses the open
+# window when this session is already mirrored, otherwise prepares every target,
+# starts the bridge in the background and returns once its OS window exists.
 launcher_main() {
-  local session=$DEFAULT_SESSION target base runtime_dir log_dir tool
+  local session=$DEFAULT_SESSION target log_dir tool
   local -a targets
   local -aU unique_targets
   local -i bridge_pid waited=0
@@ -949,6 +1091,11 @@ launcher_main() {
     (( $+commands[$tool] )) || die "$tool not found in PATH"
   done
   [[ -r $OVERLAY_CONF ]] || die "missing $OVERLAY_CONF"
+  init_runtime_dir
+
+  # Before anything touches the targets: starting one removes the helper
+  # sessions of its session, which the open window's tabs are attached to.
+  focus_open_window $session $targets && return 0
 
   init_target_env
   # Check every target before touching any, so a bad one leaves nothing behind.
@@ -959,20 +1106,12 @@ launcher_main() {
     start_target "$target" "$session"
   done
 
-  base=${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}
-  base=${base%/}/$RUNTIME_PARENT
-  mkdir -p -m 700 -- $base && [[ -O $base ]] || die "cannot use runtime dir $base"
-  runtime_dir=$(mktemp -d $base/XXXXXXXX) || die "cannot create a runtime dir in $base"
-  if (( ${#runtime_dir} + 1 + ${#SOCKET_NAME} >= SOCKET_PATH_MAX )); then
-    rmdir -- $runtime_dir
-    die "runtime dir $base is too long for a unix socket path"
-  fi
   log_dir=${XDG_STATE_HOME:-$HOME/.local/state}/kitmux
   mkdir -p -- $log_dir || die "cannot create $log_dir"
 
   $SELF _bridge $runtime_dir $session $targets </dev/null >>$log_dir/kitmux.log 2>&1 &!
   bridge_pid=$!
-  until [[ -S $runtime_dir/$SOCKET_NAME ]]; do
+  until os_window_of_run $bridge_pid; do
     kill -0 $bridge_pid 2>/dev/null || die "kitty did not start, see $log_dir/kitmux.log"
     (( (waited += TICK_CS) <= (KITTY_START_TIMEOUT + 1) * 100 )) ||
       die "timed out waiting for kitty, see $log_dir/kitmux.log"
@@ -988,7 +1127,7 @@ main() {
   unset TMUX TMUX_PANE
   case ${1:-} in
     (_bridge) shift; bridge_main "$@" ;;
-    (_hold) hold_main ;;
+    (_hold) hold_main "$2" ;;
     (_tab) shift; tab_main "$@" ;;
     (_newtab) newtab_main "$2" ;;
     (_split) split_main "$2" "$3" ;;
