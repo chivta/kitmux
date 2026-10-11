@@ -229,10 +229,12 @@ run_hook a.b
 check "hook matches a dot in a session name literally" "grouped_session axb__1 a.b : :0" "$REPLY"
 
 # --- copy last output ---
-check "copylast: output of the last command" ok "$(copylast_verdict 10 11 11)"
-check "copylast: last command printed nothing" empty "$(copylast_verdict 10 11 13)"
-check "copylast: no marks at all" nomarks "$(copylast_verdict 30 30 30)"
-check "copylast: running command, no prompt after the output" nomarks "$(copylast_verdict 10 10 10)"
+check "copylast: output of the last command" ok "$(copylast_verdict 10 11 11 11 30)"
+check "copylast: last command printed nothing, its output mark dropped" empty "$(copylast_verdict 10 11 13 11 30)"
+check "copylast: last command printed nothing, output mark on the prompt line" empty "$(copylast_verdict 12 12 12 12 30)"
+check "copylast: empty Enter after an output mark on a prompt line" empty "$(copylast_verdict 12 14 14 12 30)"
+check "copylast: no marks at all" nomarks "$(copylast_verdict 30 30 30 30 30)"
+check "copylast: running command, no prompt after the output" nomarks "$(copylast_verdict 10 10 10 9 30)"
 
 print -r -- "$checks checks, $failures failed"
 (( failures == 0 ))

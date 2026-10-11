@@ -998,14 +998,21 @@ scrollback_main() {
 # Decides what the copy-last-output key does with the cursor lines of its probe
 # (see copylast_main). $1 is where previous-prompt -o landed, the output start
 # of the last command that has one; $2 the first prompt mark after it; $3 the
-# first prompt mark after that. Prints ok, nomarks or empty.
+# first prompt mark after that; $4 where previous-prompt and next-prompt from $1
+# land, which is $1 itself when its line has a prompt mark too; $5 the bottom
+# line, where the searches start. Prints ok, nomarks or empty.
+#   $4 == $1   the output mark shares a prompt's line: the command printed
+#   != $5      nothing, and the shell (bash) did not clear the line before
+#              drawing the next prompt. Later empty Enters leave no output mark.
 #   $2 <= $1   nothing found: no marks, or only the prompt of a running command
 #   $3 != $2   the prompt after $1 is not the current one, so the last command
-#              printed nothing (tmux keeps no output mark for it) and $1 belongs
-#              to an earlier command
+#              printed nothing (drawing the next prompt drops its output mark
+#              in zsh and fish) and $1 belongs to an earlier command
 copylast_verdict() {
-  local -i out=$1 next=$2 after=$3
-  if (( next <= out )); then
+  local -i out=$1 next=$2 after=$3 out_prompt=$4 bottom=$5
+  if (( out_prompt == out && out != bottom )); then
+    print empty
+  elif (( next <= out )); then
     print nomarks
   elif (( after != next )); then
     print empty
@@ -1017,7 +1024,8 @@ copylast_verdict() {
 # Copy-last-output key: copies the output of the last command of the tab's
 # active pane, found through the OSC 133 marks the shell emits inside tmux. The
 # probe enters copy mode and prints the cursor line after previous-prompt -o and
-# two next-prompt, then copylast_verdict decides. Only an ok verdict selects
+# two next-prompt, after previous-prompt and next-prompt from that output start,
+# and at the bottom, then copylast_verdict decides. Only an ok verdict selects
 # from the output start to the line above the next prompt and runs
 # copy-selection-and-cancel, which leaves copy mode, renames the new buffer to
 # COPYLAST_BUFFER, reads it from the target and pipes it into the local
@@ -1039,10 +1047,14 @@ copylast_main() {
     send-keys -X -t "$pane" history-bottom \; \
     send-keys -X -t "$pane" previous-prompt -o \; display-message -p -t "$pane" $COPYLAST_POS \; \
     send-keys -X -t "$pane" next-prompt \; display-message -p -t "$pane" $COPYLAST_POS \; \
-    send-keys -X -t "$pane" next-prompt \; display-message -p -t "$pane" $COPYLAST_POS 2>&1)
+    send-keys -X -t "$pane" next-prompt \; display-message -p -t "$pane" $COPYLAST_POS \; \
+    send-keys -X -t "$pane" history-bottom \; send-keys -X -t "$pane" previous-prompt -o \; \
+    send-keys -X -t "$pane" previous-prompt \; \
+    send-keys -X -t "$pane" next-prompt \; display-message -p -t "$pane" $COPYLAST_POS \; \
+    send-keys -X -t "$pane" history-bottom \; display-message -p -t "$pane" $COPYLAST_POS 2>&1)
   rc=$?
   lines=("${(@f)out}")
-  if (( rc == 0 && $#lines == 3 )) && [[ ${(j::)lines} == <-> ]]; then
+  if (( rc == 0 && $#lines == 5 )) && [[ ${(j::)lines} == <-> ]]; then
     verdict=$(copylast_verdict $lines)
   else
     verdict=failed
