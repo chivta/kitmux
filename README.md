@@ -61,7 +61,9 @@ When the last command printed nothing, kitmux copies nothing and shows `last com
 
 ### Shell setup
 
-The shell inside tmux, on every target including SSH hosts, must emit OSC 133 `A` (start of the prompt) and `C` (start of the command's output). tmux records them as line marks. The `A` mark has to be written as part of the prompt string. A mark printed from a precmd hook is erased by zsh's line editor, which clears to the end of the screen before it draws the prompt, and kitmux then finds no prompts. For zsh, put this after your prompt is set:
+The shell inside tmux, on every target including SSH hosts, must emit OSC 133 `A` (start of the prompt) and `C` (start of the command's output). tmux records them as line marks. fish 4.0 and newer emits both by default. zsh, bash and fish 3.x need one of the snippets below. kitty's shell integration does not cover tmux panes: its scripts do nothing unless `KITTY_SHELL_INTEGRATION` is set, and a pane has it only when the tmux server was started from a kitty shell.
+
+zsh, after your prompt is set. The `A` mark has to be written as part of the prompt string. A mark printed from a precmd hook is erased by zsh's line editor, which clears to the end of the screen before it draws the prompt, and kitmux then finds no prompts.
 
 ```zsh
 if [[ -n $TMUX ]]; then
@@ -73,6 +75,31 @@ fi
 ```
 
 Add `_osc133_prompt` to `precmd_functions` after the function that builds `PROMPT`, so it sees the final string.
+
+bash 4.4 or newer, at the end of `~/.bashrc`. `PS0` prints `C` after you press Enter and before the command runs. macOS's `/bin/bash` 3.2 has no `PS0`, so use a newer bash there (Homebrew's, for example).
+
+```bash
+if [[ -n $TMUX ]]; then
+    _osc133_prompt() { [[ $PS1 == *'\e]133;A'* ]] || PS1='\[\e]133;A\e\\\]'$PS1; }
+    PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND;}_osc133_prompt"
+    PS0+='\e]133;C\e\\'
+fi
+```
+
+`_osc133_prompt` runs last in `PROMPT_COMMAND`, so it adds the mark back when a prompt tool rebuilds `PS1` before every prompt.
+
+fish 3.x, in `~/.config/fish/config.fish`:
+
+```fish
+if set -q TMUX; and test (string split . -- $version)[1] -lt 4
+    function _osc133_prompt --on-event fish_prompt
+        printf '\e]133;A\e\\'
+    end
+    function _osc133_output --on-event fish_preexec
+        printf '\e]133;C\e\\'
+    end
+end
+```
 
 ### tmux prefix keys
 
