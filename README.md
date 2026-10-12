@@ -105,24 +105,31 @@ end
 
 Each tab is a real tmux client, so your prefix reaches tmux and everything bound after it works, with the status bar showing the windows of the mirrored session. The window-switching keys behave like kitty tabs. When a tab's client changes window, for example with `<prefix> n`, `<prefix> p`, `<prefix> <digit>`, `<prefix> w` or `<prefix> c` (which creates a window and selects it), kitmux focuses the kitty tab of the window that was selected, creating the tab first for a new window, and puts the helper back on the window of its own tab. Every tab keeps showing its own window. Prompt-based keys such as `<prefix> ,` (rename window) work in the status line, and the tab title follows the new name.
 
+### Mouse
+
+kitmux leaves tmux's `mouse` option as your tmux.conf sets it. With `set -g mouse on`, clicking a pane makes it the active pane, and the rest of tmux's default mouse bindings apply as in any tmux client. Dragging a pane border resizes the pane. The wheel scrolls the pane in copy mode. A drag selects text in copy mode and copies it on release, to the system clipboard too when `set-clipboard` is on. Hold shift to get kitty's own selection instead. Clicking a window in the status bar switches the tab's client to that window, and kitmux follows it the same way it follows `<prefix> n`.
+
 ## tmux.conf
 
-kitmux leaves server-wide tmux options alone. Two lines help, both in the global config of each target:
+kitmux leaves server-wide tmux options alone. Three lines help, all in the global config of each target:
 
 ```tmux
 # Let programs in a pane set kitty user vars through tmux (see "Bells").
 set -g allow-passthrough on
+
+# Click a pane to make it the active one (see "Mouse").
+set -g mouse on
 
 # Keep kitmux helper sessions out of tmux-resurrect saves. List every session
 # you mirror with kitmux after the path; with none, the hook assumes main.
 set -g @resurrect-hook-post-save-layout '~/.local/bin/kitmux-resurrect-hook main'
 ```
 
-Your own tmux.conf already has `allow-passthrough on`. It needs only the hook line.
+Your own tmux.conf already has `allow-passthrough on` and `mouse on`. It needs only the hook line.
 
 ## How a tab works
 
-For each tmux window, kitmux creates a helper session grouped with SESSION, named `SESSION__<window id>` (window `@7` gets `main__7`). The helper has `mouse off`, `bell-action current`, and the tab's window selected. Its status bar is your normal one, and its `status-left` is `[#{session_group}] ` so it names the mirrored session (`main`) instead of the helper (`main__3`). The helper gets that `status-left` only when the session's `status-left` is tmux's default, so a `status-left` you set yourself is left alone (use `#{session_group}` in it for the session name). Grouped sessions share their windows, so a window or pane you create from any client shows up in SESSION and in every tab. One tmux control-mode client per target (`tmux -C attach -f no-output,ignore-size`) reports changes, and kitmux re-lists windows on every notification and every 2 seconds. When a helper's current window changes, tmux sends `%session-window-changed` to that client, and kitmux treats it as a request to focus the tab of the new window. A helper that tmux moved by itself (swap, renumber) is put back without moving focus.
+For each tmux window, kitmux creates a helper session grouped with SESSION, named `SESSION__<window id>` (window `@7` gets `main__7`). The helper has `bell-action current` and the tab's window selected, and keeps your global `mouse` option. Its status bar is your normal one, and its `status-left` is `[#{session_group}] ` so it names the mirrored session (`main`) instead of the helper (`main__3`). The helper gets that `status-left` only when the session's `status-left` is tmux's default, so a `status-left` you set yourself is left alone (use `#{session_group}` in it for the session name). Grouped sessions share their windows, so a window or pane you create from any client shows up in SESSION and in every tab. One tmux control-mode client per target (`tmux -C attach -f no-output,ignore-size`) reports changes, and kitmux re-lists windows on every notification and every 2 seconds. When a helper's current window changes, tmux sends `%session-window-changed` to that client, and kitmux treats it as a request to focus the tab of the new window. A helper that tmux moved by itself (swap, renumber) is put back without moving focus.
 
 The tab's client reconnects when the network drops, showing `kitmux: reconnecting to <host>`, and exits for good once its helper or window is gone. kitmux deletes its helpers when it stops and also removes leftovers from an earlier run when it starts.
 
@@ -149,7 +156,7 @@ The plugin dir is the tmux global environment's `TMUX_PLUGIN_MANAGER_PATH`, whic
 - Session-scoped tmux commands typed inside a tab act on that tab's helper session. `move-window -r` is the visible case: tmux 3.7c renumbers only the helper and leaves SESSION and the tab titles as they were. Use `move-window -r -t main:` instead.
 - kitty has close paths kitmux cannot remap: middle click on a tab and the macOS menu item Close Tab. kitmux reopens a kitmux tab closed this way within about 2 seconds, at the same position. Focus stays on whatever tab kitty picked after the close.
 - Each tab's status bar takes one row. A tab's client that switches to another session (`<prefix> s`, or a window listed under another session in `<prefix> w`) stays there, and kitmux does not move it back. The trees also list kitmux's helper sessions; pick windows under the tab's own session.
-- kitty's own scrollback in a kitmux tab holds nothing useful, because the tmux client redraws the screen. Use the scrollback key.
+- kitty's own scrollback in a kitmux tab holds nothing useful, because the tmux client redraws the screen. Use the scrollback key, or the mouse wheel when tmux's `mouse` is on.
 - kitty's `move_tab_*` and `goto_tab` actions act only on its active OS window. A run sorts its tabs only while its OS window is the active one and catches up when it becomes so. A tab opened in a window that is not the active one stays that window's active tab, instead of switching back to the tab that was. Tabs dragged out into another OS window keep working but are not re-sorted.
 - All runs share one kitty process, so its config (`kitty.conf`, `kitmux.conf`, the key aliases) comes from the run that started it. Quit that kitty to pick up changes.
 - Two runs for the same session on one target are refused, and so is a run that overlaps another run's session on some but not all of its targets. A bridge killed with SIGKILL leaves an OS window nothing manages. kitmux ignores its tabs when it looks for an open window.

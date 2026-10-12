@@ -489,9 +489,9 @@ ctl_cmd() {
 
 # Creates the helper session $1 showing tmux window $2: grouped with the
 # session, the normal tmux status line (naming the mirrored session, not the
-# helper, unless the user set their own status-left), no tmux mouse, and a bell
-# only for its own window. A grouped session holds every window, and the
-# default bell-action would ring this tab for a bell in any of them.
+# helper, unless the user set their own status-left), the user's mouse option,
+# and a bell only for its own window. A grouped session holds every window, and
+# the default bell-action would ring this tab for a bell in any of them.
 make_helper() {
   local -a current
   ctl_cmd "new-session -d -t '=$session:' -s '$1'"
@@ -500,7 +500,6 @@ make_helper() {
     helper_status_left "${(F)current}"
     [[ -n $REPLY ]] && ctl_cmd "set-option -t '=$1:' status-left '$REPLY'"
   fi
-  ctl_cmd "set-option -t '=$1:' mouse off"
   ctl_cmd "set-option -t '=$1:' bell-action current"
   ctl_cmd "select-window -t '=$1:$2'"
 }
