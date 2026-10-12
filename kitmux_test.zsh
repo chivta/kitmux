@@ -236,5 +236,15 @@ check "copylast: empty Enter after an output mark on a prompt line" empty "$(cop
 check "copylast: no marks at all" nomarks "$(copylast_verdict 30 30 30 30 30)"
 check "copylast: running command, no prompt after the output" nomarks "$(copylast_verdict 10 10 10 9 30)"
 
+# --- copy ---
+check "copy: tmux selection" tmux "$(copy_source 1 1 0 zsh)"
+check "copy: tmux selection wins in a Claude Code pane" tmux "$(copy_source 1 1 1 2.1.296)"
+check "copy: Claude Code, native install" claude "$(copy_source '' 0 1 2.1.296)"
+check "copy: Claude Code by name" claude "$(copy_source '' 0 1 claude)"
+check "copy: Claude Code without mouse reporting" none "$(copy_source '' 0 0 2.1.296)"
+check "copy: Claude Code pane in copy mode without a selection" none "$(copy_source 0 1 1 2.1.296)"
+check "copy: other program with mouse reporting" none "$(copy_source '' 0 1 vim)"
+check "copy: shell, nothing selected" none "$(copy_source '' 0 0 zsh)"
+
 print -r -- "$checks checks, $failures failed"
 (( failures == 0 ))

@@ -53,6 +53,12 @@ typeset -gri LOOP_RESTART_DELAY=2                # seconds before restarting a c
 typeset -gri NEWTAB_WAIT_CS=500                  # how long _newtab waits for its tab, centiseconds
 typeset -gri NEWTAB_POLL_CS=5
 typeset -gr COPY_BUFFER=kitmux-copy              # tmux buffer holding copied text until it is piped out, never one of the user's
+typeset -gr COPY_STATE='#{selection_present}|#{pane_in_mode}|#{mouse_any_flag}|#{pane_current_command}'
+typeset -gr CLAUDE_COMMAND='(claude|<->.<->.<->)'  # Claude Code's process name, a version for the native install
+# Claude Code's copy key: super+c in the kitty keyboard protocol, ESC [ 99 ; 9 u,
+# as hex for send-keys -H. With no selection it does nothing; ctrl+c would arm
+# Claude Code's exit, and other programs read these bytes as Esc and keys.
+typeset -gra CLAUDE_COPY_KEY=(1b 5b 39 39 3b 39 75)
 # Copy-last-output key. COPYLAST_POS is a tmux format for the absolute line
 # number (0 = oldest history line) of the copy-mode cursor.
 typeset -gr COPYLAST_POS='#{e|-:#{e|+:#{history_size},#{copy_cursor_y}},#{scroll_position}}'
@@ -1016,16 +1022,37 @@ selection_to_clipboard() {
   return rc
 }
 
+# Decides what the copy key copies in a pane whose COPY_STATE fields are $1 to
+# $4. Prints tmux, claude or none.
+#   tmux    the pane's copy-mode selection
+#   claude  Claude Code's own selection: its fullscreen mode takes the mouse, so
+#           a drag selects inside Claude Code. Its native install names the
+#           process after its version.
+copy_source() {
+  if [[ $1 == 1 ]]; then
+    print tmux
+  elif [[ $2 == 0 && $3 == 1 && $4 == $~CLAUDE_COMMAND ]]; then
+    print claude
+  else
+    print none
+  fi
+}
+
 # Copy key, run after kitty's own copy_to_clipboard: copies the tab's active
 # pane's copy-mode selection, which a mouse drag leaves when the user's
-# tmux.conf unbinds MouseDragEnd1Pane. Without one it does nothing, so the
-# clipboard keeps what kitty copied from its own (shift+drag) selection.
+# tmux.conf unbinds MouseDragEnd1Pane, or sends Claude Code its copy key. With
+# neither it does nothing, so the clipboard keeps what kitty copied from its
+# own (shift+drag) selection.
 copy_main() {
   local pane
+  local -a state
   key_context "$1" || return 1
   pane="=${win_session}${HELPER_SEPARATOR}${win_tmux#@}:$win_tmux"
-  [[ $(tmux_on "$win_target" display-message -p -t "$pane" '#{selection_present}') == 1 ]] || return 0
-  selection_to_clipboard "$pane"
+  state=("${(@s:|:)$(tmux_on "$win_target" display-message -p -t "$pane" $COPY_STATE)}")
+  case $(copy_source "${state[@]}") in
+    (tmux) selection_to_clipboard "$pane" ;;
+    (claude) tmux_on "$win_target" send-keys -t "$pane" -H $CLAUDE_COPY_KEY ;;
+  esac
 }
 
 # Decides what the copy-last-output key does with the cursor lines of its probe

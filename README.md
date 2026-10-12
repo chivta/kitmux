@@ -49,7 +49,7 @@ The keys work only in kitmux tabs. Plain kitty tabs in the same instance keep yo
 | Close split | cmd+w | ctrl+shift+w | asks `Kill tmux pane in <tab>? [y/N]`, then `kill-pane` on the active pane |
 | Close tab | not bound, see below | not bound | asks `Kill tmux window <tab>? [y/N]`, then `kill-window` |
 | Scrollback | cmd+h | ctrl+shift+h | the active pane's full history (`capture-pane -p -e -J -S -`) in `less -R +G` |
-| Copy | cmd+c | ctrl+shift+c | kitty's own copy, then the active pane's tmux copy-mode selection to the local clipboard, see [Mouse](#mouse) |
+| Copy | cmd+c | ctrl+shift+c | kitty's own copy, then the active pane's tmux copy-mode selection to the local clipboard, or Claude Code's selection in a Claude Code pane, see [Mouse](#mouse) |
 | Copy last output | cmd+shift+c | ctrl+shift+y | copies the output of the last command of the active pane to the local clipboard, see [Shell setup](#shell-setup) |
 
 The questions open in a kitty overlay over the tab. Only `y` or `Y` kills. Any other key, Esc, or closing the overlay (cmd+w inside it) cancels. kitmux sends the kill to tmux and never closes a kitty tab itself. The tab closes when tmux reports the window gone. Closing the last pane of a window with the close split key therefore closes the tab too.
@@ -128,6 +128,8 @@ bind -T root TripleClick1Pane select-pane -t = \; if -F '#{||:#{pane_in_mode},#{
 ```
 
 A drag, a double click (word) or a triple click (line) then leaves the pane in copy mode with the text selected, and keys go to copy mode until you leave it. The copy key copies the selection to the local clipboard through the `kitmux-copy` buffer, the same way copy last output does, and leaves copy mode. Esc or `q` leaves without copying. The copy key runs kitty's own copy first, so a shift+drag selection copies as before. The bindings are server-wide, so in a plain tmux client copy the selection with tmux's own keys (`M-w`, or Enter with `mode-keys vi`).
+
+The copy key also copies a Claude Code selection. Claude Code's fullscreen mode keeps its own selection, and with `copyOnSelect` off it copies on super+c from the kitty keyboard protocol. That key never reaches a program inside tmux, so kitmux sends the bytes itself (`ESC [99;9u`) to the active pane. Claude Code ignores them when nothing is selected, unlike ctrl+c, which then arms its exit. kitmux sends them only when the pane is not in copy mode, has mouse reporting on, and runs a process named `claude`, or a version number such as `2.1.296` for the native install. Other programs would read the bytes as Esc and keys.
 
 ## tmux.conf
 
