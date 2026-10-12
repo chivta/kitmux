@@ -14,7 +14,8 @@
 #   kitmux _tab       runs in every kitty tab: the reconnecting tmux client
 #   kitmux _hold      first kitty window of a run's OS window, shown until the
 #                     first tab exists
-#   kitmux _newtab, _split, _pane, _confirm, _scrollback, _copylast   key actions
+#   kitmux _newtab, _split, _pane, _confirm, _scrollback, _copy, _copylast
+#                     key actions
 
 emulate -R zsh
 setopt extended_glob no_equals pipe_fail
@@ -51,10 +52,10 @@ typeset -gri RECONNECT_MIN=1 RECONNECT_MAX=15    # backoff bounds in seconds
 typeset -gri LOOP_RESTART_DELAY=2                # seconds before restarting a crashed loop
 typeset -gri NEWTAB_WAIT_CS=500                  # how long _newtab waits for its tab, centiseconds
 typeset -gri NEWTAB_POLL_CS=5
+typeset -gr COPY_BUFFER=kitmux-copy              # tmux buffer holding copied text until it is piped out, never one of the user's
 # Copy-last-output key. COPYLAST_POS is a tmux format for the absolute line
 # number (0 = oldest history line) of the copy-mode cursor.
 typeset -gr COPYLAST_POS='#{e|-:#{e|+:#{history_size},#{copy_cursor_y}},#{scroll_position}}'
-typeset -gr COPYLAST_BUFFER=kitmux-copy          # tmux buffer holding the text until it is piped out, never one of the user's
 typeset -gr COPYLAST_NO_MARKS='no OSC 133 marks'
 typeset -gr COPYLAST_NO_OUTPUT='last command printed nothing'
 typeset -gr COPYLAST_FAILED='copy of last output failed (tmux 3.5+ needed)'
@@ -999,6 +1000,34 @@ scrollback_main() {
   tmux_on "$win_target" capture-pane -p -e -J -S - -t "$win_tmux" | less -R +G
 }
 
+# Copies the copy-mode selection of pane $1 on the tab's target to the local
+# clipboard and leaves copy mode. copy-selection-and-cancel makes a new buffer,
+# renamed to COPY_BUFFER, read from the target and piped into the local
+# clipboard tool (pbcopy on macOS, wl-copy elsewhere), then deleted. That works
+# for ssh targets without OSC 52, and the user's own buffers stay as they were.
+selection_to_clipboard() {
+  local clipboard_cmd=wl-copy
+  local -i rc
+  [[ $OSTYPE == darwin* ]] && clipboard_cmd=pbcopy
+  tmux_on "$win_target" send-keys -X -t "$1" copy-selection-and-cancel \; set-buffer -n $COPY_BUFFER &&
+    tmux_on "$win_target" show-buffer -b $COPY_BUFFER | ${=clipboard_cmd}
+  rc=$?
+  tmux_on "$win_target" delete-buffer -b $COPY_BUFFER &>/dev/null
+  return rc
+}
+
+# Copy key, run after kitty's own copy_to_clipboard: copies the tab's active
+# pane's copy-mode selection, which a mouse drag leaves when the user's
+# tmux.conf unbinds MouseDragEnd1Pane. Without one it does nothing, so the
+# clipboard keeps what kitty copied from its own (shift+drag) selection.
+copy_main() {
+  local pane
+  key_context "$1" || return 1
+  pane="=${win_session}${HELPER_SEPARATOR}${win_tmux#@}:$win_tmux"
+  [[ $(tmux_on "$win_target" display-message -p -t "$pane" '#{selection_present}') == 1 ]] || return 0
+  selection_to_clipboard "$pane"
+}
+
 # Decides what the copy-last-output key does with the cursor lines of its probe
 # (see copylast_main). $1 is where previous-prompt -o landed, the output start
 # of the last command that has one; $2 the first prompt mark after it; $3 the
@@ -1030,20 +1059,14 @@ copylast_verdict() {
 # probe enters copy mode and prints the cursor line after previous-prompt -o and
 # two next-prompt, after previous-prompt and next-prompt from that output start,
 # and at the bottom, then copylast_verdict decides. Only an ok verdict selects
-# from the output start to the line above the next prompt and runs
-# copy-selection-and-cancel, which leaves copy mode, renames the new buffer to
-# COPYLAST_BUFFER, reads it from the target and pipes it into the local
-# clipboard tool (pbcopy on macOS, wl-copy elsewhere), then deletes it. That
-# works for ssh targets without OSC 52, and the user's own buffers stay as they
-# were. Otherwise copy mode is left and display-message says why. A pane already
-# in copy mode is reset first. Like _split, it names the tab's own helper
-# session.
+# from the output start to the line above the next prompt and copies it with
+# selection_to_clipboard. Otherwise copy mode is left and display-message says
+# why. A pane already in copy mode is reset first. Like _split, it names the
+# tab's own helper session.
 copylast_main() {
   local pane out verdict message client
   local -i rc
   local -a lines
-  local clipboard_cmd=wl-copy
-  [[ $OSTYPE == darwin* ]] && clipboard_cmd=pbcopy
   key_context "$1" || return 1
   pane="=${win_session}${HELPER_SEPARATOR}${win_tmux#@}:$win_tmux"
   tmux_on "$win_target" send-keys -X -t "$pane" cancel &>/dev/null
@@ -1068,12 +1091,7 @@ copylast_main() {
       tmux_on "$win_target" send-keys -X -t "$pane" history-bottom \; \
         send-keys -X -t "$pane" previous-prompt -o \; send-keys -X -t "$pane" begin-selection \; \
         send-keys -X -t "$pane" next-prompt \; send-keys -X -t "$pane" cursor-up \; \
-        send-keys -X -t "$pane" end-of-line \; send-keys -X -t "$pane" copy-selection-and-cancel \; \
-        set-buffer -n $COPYLAST_BUFFER &&
-        tmux_on "$win_target" show-buffer -b $COPYLAST_BUFFER | ${=clipboard_cmd}
-      rc=$?
-      tmux_on "$win_target" delete-buffer -b $COPYLAST_BUFFER &>/dev/null
-      (( rc == 0 )) && return
+        send-keys -X -t "$pane" end-of-line && selection_to_clipboard "$pane" && return
       message=$COPYLAST_FAILED ;;
     (nomarks) message=$COPYLAST_NO_MARKS ;;
     (empty) message=$COPYLAST_NO_OUTPUT ;;
@@ -1231,6 +1249,7 @@ main() {
     (_pane) pane_main "$2" "$3" ;;
     (_confirm) confirm_main "$2" "$3" ;;
     (_scrollback) scrollback_main "$2" ;;
+    (_copy) copy_main "$2" ;;
     (_copylast) copylast_main "$2" ;;
     (*) launcher_main "$@" ;;
   esac

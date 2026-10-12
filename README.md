@@ -49,6 +49,7 @@ The keys work only in kitmux tabs. Plain kitty tabs in the same instance keep yo
 | Close split | cmd+w | ctrl+shift+w | asks `Kill tmux pane in <tab>? [y/N]`, then `kill-pane` on the active pane |
 | Close tab | not bound, see below | not bound | asks `Kill tmux window <tab>? [y/N]`, then `kill-window` |
 | Scrollback | cmd+h | ctrl+shift+h | the active pane's full history (`capture-pane -p -e -J -S -`) in `less -R +G` |
+| Copy | cmd+c | ctrl+shift+c | kitty's own copy, then the active pane's tmux copy-mode selection to the local clipboard, see [Mouse](#mouse) |
 | Copy last output | cmd+shift+c | ctrl+shift+y | copies the output of the last command of the active pane to the local clipboard, see [Shell setup](#shell-setup) |
 
 The questions open in a kitty overlay over the tab. Only `y` or `Y` kills. Any other key, Esc, or closing the overlay (cmd+w inside it) cancels. kitmux sends the kill to tmux and never closes a kitty tab itself. The tab closes when tmux reports the window gone. Closing the last pane of a window with the close split key therefore closes the tab too.
@@ -109,7 +110,24 @@ Each tab is a real tmux client, so your prefix reaches tmux and everything bound
 
 ### Mouse
 
-kitmux leaves tmux's `mouse` option as your tmux.conf sets it. With `set -g mouse on`, clicking a pane makes it the active pane, and the rest of tmux's default mouse bindings apply as in any tmux client. Dragging a pane border resizes the pane. The wheel scrolls the pane in copy mode. A drag selects text in copy mode and copies it on release, to the system clipboard too when `set-clipboard` is on. Hold shift to get kitty's own selection instead. Clicking a window in the status bar switches the tab's client to that window, and kitmux follows it the same way it follows `<prefix> n`.
+kitmux leaves tmux's `mouse` option as your tmux.conf sets it. With `set -g mouse on`, clicking a pane makes it the active pane, and the rest of tmux's default mouse bindings apply as in any tmux client. Dragging a pane border resizes the pane. The wheel scrolls the pane in copy mode. A drag selects text in copy mode, and tmux's default bindings copy it on release, to the system clipboard too when `set-clipboard` is on. Hold shift to get kitty's own selection instead. A program that turns on mouse reporting itself, such as Claude Code's fullscreen mode, gets the drag instead of tmux and does its own selection. Clicking a window in the status bar switches the tab's client to that window, and kitmux follows it the same way it follows `<prefix> n`.
+
+To keep a selection until you copy it, as in a plain kitty tab, add these lines to tmux.conf:
+
+```tmux
+# Mouse selections stay until copied (cmd+c in a kitmux tab) instead of being
+# copied and cleared on release.
+unbind -T copy-mode MouseDragEnd1Pane
+unbind -T copy-mode-vi MouseDragEnd1Pane
+bind -T copy-mode DoubleClick1Pane select-pane \; send-keys -X select-word
+bind -T copy-mode-vi DoubleClick1Pane select-pane \; send-keys -X select-word
+bind -T copy-mode TripleClick1Pane select-pane \; send-keys -X select-line
+bind -T copy-mode-vi TripleClick1Pane select-pane \; send-keys -X select-line
+bind -T root DoubleClick1Pane select-pane -t = \; if -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' { send-keys -M } { copy-mode -H ; send-keys -X select-word }
+bind -T root TripleClick1Pane select-pane -t = \; if -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' { send-keys -M } { copy-mode -H ; send-keys -X select-line }
+```
+
+A drag, a double click (word) or a triple click (line) then leaves the pane in copy mode with the text selected, and keys go to copy mode until you leave it. The copy key copies the selection to the local clipboard through the `kitmux-copy` buffer, the same way copy last output does, and leaves copy mode. Esc or `q` leaves without copying. The copy key runs kitty's own copy first, so a shift+drag selection copies as before. The bindings are server-wide, so in a plain tmux client copy the selection with tmux's own keys (`M-w`, or Enter with `mode-keys vi`).
 
 ## tmux.conf
 
