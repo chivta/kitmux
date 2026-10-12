@@ -957,12 +957,17 @@ split_main() {
   tmux_on "$win_target" split-window -$1 -t "=${win_session}${HELPER_SEPARATOR}${win_tmux#@}:$win_tmux" -c '#{pane_current_path}'
 }
 
-# Pane focus keys: $1 is next or prev, $2 the kitty window.
+# Pane keys: $1 is next or prev (focus that pane) or forward or backward (swap
+# the active pane with the next or previous one, and it stays active), $2 the
+# kitty window.
 pane_main() {
-  local step
-  case $1 in (next) step=+ ;; (prev) step=- ;; (*) return 1 ;; esac
-  key_context "$2" || return 1
-  tmux_on "$win_target" select-pane -t "$win_tmux.$step"
+  [[ $1 == (next|prev|forward|backward) ]] && key_context "$2" || return 1
+  case $1 in
+    (next) tmux_on "$win_target" select-pane -t "$win_tmux.+" ;;
+    (prev) tmux_on "$win_target" select-pane -t "$win_tmux.-" ;;
+    (forward) tmux_on "$win_target" swap-pane -D -t "$win_tmux" ;;
+    (backward) tmux_on "$win_target" swap-pane -U -t "$win_tmux" ;;
+  esac
 }
 
 # Close keys, run in an overlay: $1 is pane or window, $2 the kitty window
