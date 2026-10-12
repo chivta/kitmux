@@ -84,6 +84,50 @@ check_status "target with escape" no valid_target $'a\eb'
 check_status "target with newline" no valid_target $'a\nb'
 check_status "target with zero-width space" no valid_target $'a​b'
 
+# --- ssh options after a target ---
+# Prints parse_targets' outcome: the targets, then each target's ssh options as
+# the words ssh gets, or the error.
+run_parse() {
+  local t
+  if ! parse_targets "$@"; then
+    print -r -- "error: $REPLY"
+    return
+  fi
+  print -rn -- "${(j:,:)reply}"
+  for t in $reply; do
+    print -rn -- " | $t:${(j:,:)${(@Q)${(z)target_ssh[$t]}}}"
+  done
+}
+check "ssh: no options" "local,devbox | local: | devbox:" "$(run_parse local devbox)"
+check "ssh: options per target" "a,b | a:-p,2222,-A | b:-J,jump" "$(run_parse a -p 2222 -A b -J jump)"
+check "ssh: attached value" "a | a:-p2222,-oUser=x" "$(run_parse a -p2222 -oUser=x)"
+check "ssh: value flag ending a cluster" "a | a:-Ap,22" "$(run_parse a -Ap 22)"
+check "ssh: value flag inside a cluster takes the rest" "a,b | a:-pA | b:" "$(run_parse a -pA b)"
+check "ssh: value with spaces and quotes" "a | a:-o,ProxyCommand=nc -X 5 '%h' %p" "$(run_parse a -o "ProxyCommand=nc -X 5 '%h' %p")"
+check "ssh: value that starts with a dash" "a | a:-o,-x" "$(run_parse a -o -x)"
+check "ssh: missing value" "error: ssh option '-p' needs a value" "$(run_parse a -p)"
+check "ssh: option after local" "error: ssh option '-A' must follow an ssh target" "$(run_parse local -A)"
+check "ssh: -s after a target" "error: -s goes before the targets" "$(run_parse a -s work)"
+
+# The words ssh gets: the user's options, then kitmux's, then extra ssh args.
+fake_ssh() { print -r -- "${(j:,:)@}" }
+ssh_cmd=(fake_ssh)
+target_ssh=(devbox " '-p' '2222' '-o' 'User=a b'")
+check "ssh: option order" "-p,2222,-o,User=a b,${(j:,:)SSH_OPTS},-t,--,devbox,true" "$(on_target devbox true -t)"
+check "ssh: target without options" "${(j:,:)SSH_OPTS},--,other,true" "$(on_target other true)"
+
+# Key actions load a run's options from its bridge's file.
+ssh_dir=$(mktemp -d)
+kitty_sock=unix:$ssh_dir/kitty.sock
+print -r -- "a  '-p' '1'"$'\n'"b  '-J' 'j'" > $ssh_dir/$SSH_FILE_PREFIX.42
+target_ssh=()
+load_target_ssh 42 b
+check "ssh: load a run's options" "-J,j" "${(j:,:)${(@Q)${(z)target_ssh[b]}}}"
+target_ssh=()
+load_target_ssh ../42 b
+check "ssh: run id must be a number" "" "$target_ssh[b]"
+rm -rf -- $ssh_dir
+
 # --- names and titles ---
 clean_name $'a\tb\ec\x7fd'
 check "clean_name strips C0 and DEL" abcd "$REPLY"

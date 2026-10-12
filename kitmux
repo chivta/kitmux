@@ -39,6 +39,12 @@ typeset -gr RUNTIME_PARENT=kitmux-$UID           # stable per-user dir: the shar
 typeset -gr SOCKET_NAME=kitty.sock
 typeset -gri SOCKET_PATH_MAX=100                 # macOS limit for unix socket paths is 104
 typeset -gr SORT_FLAG_PREFIX=sort                # sort.<bridge pid> in the runtime dir: non-empty when a loop wants a re-sort
+typeset -gr SSH_FILE_PREFIX=ssh                  # ssh.<bridge pid> in the runtime dir: "TARGET OPTIONS" lines for the key actions
+# kitmux's own ssh options. They come after the user's, so a user -o setting
+# wins (ssh keeps the first value it gets for an option).
+typeset -gra SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=$HOME/.ssh/kitmux-%C" -o ControlPersist=10m
+  -o ServerAliveInterval=10 -o ServerAliveCountMax=3)
+typeset -gr SSH_VALUE_FLAGS=BbcDEeFIiJLlmOoPpQRSWw  # ssh flags that take a value (OpenSSH 10.3)
 typeset -gr INSTANCE_GROUP_PREFIX=kitmux         # kitty --instance-group = prefix-<checksum of the runtime dir>
 typeset -gri KITTY_START_TIMEOUT=10              # seconds to wait for kitty's socket
 typeset -gri TICK_CS=20                          # bridge supervision tick, centiseconds
@@ -188,10 +194,10 @@ typeset -gr JQ_OPEN_TABS='
 | "\(.user_vars.kitmux_run // 0) \(.user_vars.kitmux_target) \(.user_vars.kitmux_session) \($tab.id)"'
 
 # jq filter: the kitmux vars of the only window in the listing, one per line:
-# target, tmux window id, session, overlay flag, tab title.
+# target, tmux window id, session, overlay flag, run, tab title.
 typeset -gr JQ_WINDOW_VARS='
 .[0].tabs[0] | .title as $title | .windows[0].user_vars
-| (.kitmux_target // ""), (.kitmux_window // ""), (.kitmux_session // ""), (.kitmux_overlay // ""), $title'
+| (.kitmux_target // ""), (.kitmux_window // ""), (.kitmux_session // ""), (.kitmux_overlay // ""), (.kitmux_run // ""), $title'
 
 # jq filter: tab id of the kitmux window of target $t showing tmux window $w.
 typeset -gr JQ_TAB_OF_WINDOW='
@@ -336,15 +342,66 @@ find_open_tab() {
 
 # --- running commands on a target ---------------------------------------------
 
-# Sets up the globals every target command needs: the ssh command line and the
+# The user's ssh options for each ssh target, the words after it on the
+# launcher's command line, quoted and joined (empty for none).
+typeset -gA target_ssh
+
+# Sets up the globals every target command needs: the ssh command and the
 # locale tmux runs under (resurrect saves nothing without a UTF-8 locale).
 init_target_env() {
   typeset -ga ssh_cmd
-  ssh_cmd=(${=KITMUX_SSH:-ssh}
-    -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/kitmux-%C" -o ControlPersist=10m
-    -o ServerAliveInterval=10 -o ServerAliveCountMax=3)
+  ssh_cmd=(${=KITMUX_SSH:-ssh})
   typeset -g tmux_lang=${LANG:-$FALLBACK_LANG}
   [[ $tmux_lang =~ $LANG_PATTERN ]] || tmux_lang=$FALLBACK_LANG
+}
+
+# Splits the launcher's words after its own options into the targets (set in
+# reply) and each target's ssh options (set in target_ssh): the words from a
+# target up to the next one go to ssh for it. A word starting with - is an
+# option. If one of SSH_VALUE_FLAGS ends it, it takes the next word as its value
+# (-p 2222), unless the value is attached (-p2222). Fails with a message in REPLY.
+parse_targets() {
+  local word flags target=
+  local -i i
+  reply=()
+  target_ssh=()
+  for (( i = 1; i <= $#; i++ )); do
+    word=$argv[i]
+    if [[ $word != -* ]]; then
+      target=$word
+      reply+=($target)
+      continue
+    fi
+    if [[ -z $target || $target == $LOCAL_TARGET ]]; then
+      REPLY="ssh option '$word' must follow an ssh target"
+      return 1
+    fi
+    [[ $word == -s ]] && { REPLY="-s goes before the targets"; return 1 }
+    target_ssh[$target]+=" ${(qq)word}"
+    flags=${word#-}
+    while [[ -n $flags ]]; do
+      if [[ $SSH_VALUE_FLAGS == *$flags[1]* ]]; then
+        if [[ -z $flags[2,-1] ]]; then
+          (( i < $# )) || { REPLY="ssh option '$word' needs a value"; return 1 }
+          (( i++ ))
+          target_ssh[$target]+=" ${(qq)argv[i]}"
+        fi
+        break
+      fi
+      flags=$flags[2,-1]
+    done
+  done
+}
+
+# Loads the ssh options of run $1 for target $2 into target_ssh from the file
+# its bridge wrote. Key actions use it: the run and target come from kitty user
+# vars, which a program in the pane can set, so the options themselves must not.
+load_target_ssh() {
+  local file=${${kitty_sock#unix:}:h}/$SSH_FILE_PREFIX.$1 target opts
+  [[ $1 == <-> && -r $file ]] || return 0
+  while IFS=' ' read -r target opts; do
+    [[ $target == $2 ]] && target_ssh[$2]=$opts
+  done < $file
 }
 
 # Sets REPLY to a POSIX shell command line: the given words, each single-quoted,
@@ -361,7 +418,7 @@ on_target() {
   if [[ $target == $LOCAL_TARGET ]]; then
     sh -c "$line"
   else
-    $ssh_cmd "$@" -- "$target" "$line"
+    $ssh_cmd ${(@Q)${(z)target_ssh[$target]}} $SSH_OPTS "$@" -- "$target" "$line"
   fi
 }
 
@@ -416,13 +473,15 @@ close_os_window() {
 }
 
 # Looks up the kitmux user vars of kitty window $1 and sets win_target,
-# win_tmux, win_session, win_overlay and win_title. Fails for other windows.
+# win_tmux, win_session, win_overlay and win_title, and loads the target's ssh
+# options. Fails for other windows.
 window_vars() {
   local out
   local -a fields
   out=$(kt ls --match "id:$1" 2>/dev/null | jq -r "$JQ_WINDOW_VARS") || return 1
   fields=("${(@f)out}")
-  typeset -g win_target=$fields[1] win_tmux=$fields[2] win_session=$fields[3] win_overlay=$fields[4] win_title=$fields[5]
+  typeset -g win_target=$fields[1] win_tmux=$fields[2] win_session=$fields[3] win_overlay=$fields[4] win_title=$fields[6]
+  load_target_ssh "$fields[5]" "$win_target"
   [[ -n $win_target && $win_tmux == @<-> ]] && valid_session "$win_session"
 }
 
@@ -435,7 +494,7 @@ ctl_open() {
   if [[ $target == $LOCAL_TARGET ]]; then
     coproc sh -c "$REPLY"
   else
-    coproc $ssh_cmd -- "$target" "$REPLY"
+    coproc $ssh_cmd ${(@Q)${(z)target_ssh[$target]}} $SSH_OPTS -- "$target" "$REPLY"
   fi
   typeset -g ctl_pid=$!
   typeset -g ctl_in ctl_out
@@ -604,7 +663,7 @@ reconcile() {
         --var "kitmux_target=$target" --var "kitmux_window=$window" \
         --var "kitmux_session=$session" --var "kitmux_order=$order" \
         --var "kitmux_run=$bridge_run" \
-        "$SELF" _tab "$session" "$target" "$window") || { kitty_failure; return }
+        "$SELF" _tab "$session" "$target" "$window" "$target_ssh[$target]") || { kitty_failure; return }
       (( os_focused || ! os_active )) || kt action goto_tab $os_position
       log "$target: opened tab for $window ($title)"
       changed=1
@@ -792,11 +851,18 @@ bridge_main() {
   typeset -g runtime_dir=$1 session=$2 bridge_run=$$ os_window
   shift 2
   typeset -g sort_flag=$runtime_dir/$SORT_FLAG_PREFIX.$bridge_run
+  local ssh_file=$runtime_dir/$SSH_FILE_PREFIX.$bridge_run
   local -a targets loop_pids loop_state config
   local group
   local -i i kitty_pid waited=0 last_sort=0 quit_sent=0 rc alive launcher_rc=-1
   local user_conf=${KITTY_CONFIG_DIRECTORY:-$HOME/.config/kitty}/kitty.conf
-  targets=("$@")
+  # The launcher passes each target followed by its ssh options.
+  while (( $# >= 2 )); do
+    targets+=($1)
+    target_ssh[$1]=$2
+    print -r -- "$1 $2"
+    shift 2
+  done > $ssh_file
   typeset -g kitty_sock=unix:$runtime_dir/$SOCKET_NAME
   trap '' HUP PIPE
   # A kitmux started from inside another kitty must not hand that context on.
@@ -826,11 +892,11 @@ bridge_main() {
     if (( launcher_rc < 0 )) && ! kill -0 $kitty_pid 2>/dev/null; then
       wait $kitty_pid
       launcher_rc=$?
-      (( launcher_rc == 0 )) || { log "kitty failed with status $launcher_rc"; rm -f -- $sort_flag; return 1 }
+      (( launcher_rc == 0 )) || { log "kitty failed with status $launcher_rc"; rm -f -- $sort_flag $ssh_file; return 1 }
     fi
     if (( (waited += TICK_CS) > KITTY_START_TIMEOUT * 100 )); then
       log "kitty did not open a window"
-      rm -f -- $sort_flag
+      rm -f -- $sort_flag $ssh_file
       return 1
     fi
     zselect -t $TICK_CS
@@ -838,7 +904,7 @@ bridge_main() {
   os_window=$REPLY
   log "OS window $os_window"
 
-  trap 'kill $loop_pids 2>/dev/null; wait $loop_pids 2>/dev/null; rm -f -- $sort_flag; exit 0' TERM INT
+  trap 'kill $loop_pids 2>/dev/null; wait $loop_pids 2>/dev/null; rm -f -- $sort_flag $ssh_file; exit 0' TERM INT
   for (( i = 1; i <= $#targets; i++ )); do
     loop_main $((i - 1)) $targets[i] &
     loop_pids[i]=${!}   # zsh 5.9 stores a bare $! literally in an array element
@@ -883,7 +949,7 @@ bridge_main() {
   log "OS window $os_window is gone, stopping"
   kill $loop_pids 2>/dev/null
   wait $loop_pids 2>/dev/null
-  rm -f -- $sort_flag
+  rm -f -- $sort_flag $ssh_file
 }
 
 # --- commands kitty runs ------------------------------------------------------
@@ -911,7 +977,8 @@ hold_main() {
   [[ -n $first ]] && kt focus-tab --match "id:$first"
 }
 
-# Runs in a kitty tab. Args: session, target, tmux window id. Keeps a tmux
+# Runs in a kitty tab. Args: session, target, tmux window id, the target's ssh
+# options (see target_ssh). Keeps a tmux
 # client attached to the window's helper session, reattaching after a network
 # drop, and returns (closing the tab) once the helper or the window is gone.
 tab_main() {
@@ -920,6 +987,7 @@ tab_main() {
   local helper=${session}${HELPER_SEPARATOR}${window#@}
   local -i rc delay=$RECONNECT_MIN started
   valid_session "$session" && [[ $window == @<-> ]] || return 1
+  target_ssh[$target]=$4
   init_target_env
   while true; do
     started=$EPOCHSECONDS
@@ -1151,13 +1219,14 @@ copylast_main() {
 
 # Prints the usage text.
 usage() {
-  print -r -- "usage: kitmux [-s SESSION] [TARGET...]
+  print -r -- "usage: kitmux [-s SESSION] [TARGET [SSH OPTION...]...]
 
 Opens a kitty OS window with one tab per window of tmux session SESSION
 (default: $DEFAULT_SESSION) on each TARGET. A TARGET is '$LOCAL_TARGET' or an ssh
-destination; no TARGET means '$LOCAL_TARGET'. Every run opens its own OS window
-in one shared kitty process. When a window for SESSION on the TARGETs is
-already open, kitmux focuses it instead.
+destination; no TARGET means '$LOCAL_TARGET'. Options after an ssh destination go
+to every ssh kitmux runs for it, e.g. 'kitmux devbox -p 2222 -J bastion'. Every
+run opens its own OS window in one shared kitty process. When a window for
+SESSION on the TARGETs is already open, kitmux focuses it instead.
 
 Environment: KITMUX_SSH overrides the ssh command, e.g. \"ssh -F /path/config\"."
 }
@@ -1223,7 +1292,7 @@ focus_open_window() {
 # starts the bridge in the background and returns once its OS window exists.
 launcher_main() {
   local session=$DEFAULT_SESSION target log_dir tool
-  local -a targets
+  local -a targets bridge_args
   local -aU unique_targets
   local -i bridge_pid waited=0
   while (( $# )); do
@@ -1236,7 +1305,8 @@ launcher_main() {
       (*) break ;;
     esac
   done
-  targets=("$@")
+  parse_targets "$@" || die "$REPLY"
+  targets=("${reply[@]}")
   (( $#targets )) || targets=($LOCAL_TARGET)
   valid_session "$session" ||
     die "invalid session name '$session': use 1-32 of A-Z a-z 0-9 _ . -"
@@ -1268,7 +1338,10 @@ launcher_main() {
   log_dir=${XDG_STATE_HOME:-$HOME/.local/state}/kitmux
   mkdir -p -- $log_dir || die "cannot create $log_dir"
 
-  $SELF _bridge $runtime_dir $session $targets </dev/null >>$log_dir/kitmux.log 2>&1 &!
+  for target in $targets; do
+    bridge_args+=($target "$target_ssh[$target]")
+  done
+  $SELF _bridge $runtime_dir $session $bridge_args </dev/null >>$log_dir/kitmux.log 2>&1 &!
   bridge_pid=$!
   until os_window_of_run $bridge_pid; do
     kill -0 $bridge_pid 2>/dev/null || die "kitty did not start, see $log_dir/kitmux.log"

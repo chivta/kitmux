@@ -16,13 +16,16 @@ kitmux finds `kitmux.conf` next to the real path of the script, so a symlink on 
 ## Usage
 
 ```sh
-kitmux [-s SESSION] [TARGET...]
+kitmux [-s SESSION] [TARGET [SSH OPTION...]...]
 kitmux                          # session "main" on this machine
 kitmux local devbox             # local tabs first, then devbox's
 kitmux -s work me@build.example # session "work" on build.example
+kitmux devbox -p 2222 -J bastion local
 ```
 
 A TARGET is `local` or an SSH destination (`user@host`, `host`, or an ssh_config alias). SESSION defaults to `main` and applies to every target. kitmux creates SESSION on a target where it doesn't exist.
+
+Options after an SSH destination, up to the next target, go to every ssh kitmux runs for that destination: the control client, the tabs' clients and the key actions. A flag that takes a value (`-p`, `-i`, `-J`, `-o` and the rest of ssh's) takes the next word, so `-o -x` passes `-x` as the value. kitmux's own options (`-s`) go before the targets. Your options come before kitmux's own `-o` settings, and ssh keeps the first value it gets for an option, so `-o ControlPath=...` or `-o ServerAliveInterval=...` replaces kitmux's. The bridge keeps each run's options in `ssh.<bridge pid>` in the runtime dir, where the key actions read them. They don't come from kitty user vars, because a program in a pane can set those through tmux passthrough. A second run for a session that is already open focuses its window and ignores the new options.
 
 The launcher starts a background bridge, which opens a new OS window in the shared kitty process, then gives your prompt back. The first run starts that process (`kitty --single-instance --instance-group kitmux-<n> --listen-on ...`, with your kitty.conf and `kitmux.conf`), and later runs only add an OS window to it. The process is dedicated to kitmux and separate from any kitty you started yourself. Its socket lives in `${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/kitmux-<uid>/kitty.sock`, a fixed location that no single run owns. The bridge logs to `${XDG_STATE_HOME:-$HOME/.local/state}/kitmux/kitmux.log`.
 
@@ -194,4 +197,4 @@ The plugin dir is the tmux global environment's `TMUX_PLUGIN_MANAGER_PATH`, whic
 
 ## Tests
 
-`zsh kitmux_test.zsh` runs the unit tests: name validation and cleaning, titles, sort keys and tab moves, the tmux version check, shell quoting, and the resurrect hook. Everything else was checked by running kitmux against a local tmux server and an SSH container.
+`zsh kitmux_test.zsh` runs the unit tests: name validation and cleaning, titles, sort keys and tab moves, the tmux version check, shell quoting, the resurrect hook, the copy keys' decisions, and splitting ssh options from targets. Everything else was checked by running kitmux against a local tmux server and an SSH container.
