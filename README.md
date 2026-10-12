@@ -35,7 +35,7 @@ Each run's bridge manages only the tabs of its own OS window and stops when that
 
 Tabs are titled `tmux-<index> <name>` for local windows and `<host>:tmux-<index> <name>` for remote ones, `user@` dropped. They follow the targets in command line order, then the tmux window index. tmux is the source of truth. A new, renamed, moved, swapped, renumbered or killed window shows up in kitty within about 2 seconds. When SESSION ends on a target, its tabs close. When no target has SESSION left, the run's OS window closes without asking, and the other windows stay.
 
-Closing an OS window only detaches that run, and quitting kitty detaches every run. tmux keeps every window and pane. kitty may ask before closing, because each tab runs a program (the tmux client). Whether kitty itself quits after its last window closes follows your kitty.conf (`macos_quit_when_last_window_closed`). If it stays running, the next run reuses it.
+Closing an OS window only detaches that run, and quitting kitty detaches every run. Detaching a tab's client, with `<prefix> d` or `detach-client`, does the same for its run: kitmux closes that run's OS window with all its tabs. tmux keeps every window and pane. kitty may ask before closing, because each tab runs a program (the tmux client). Whether kitty itself quits after its last window closes follows your kitty.conf (`macos_quit_when_last_window_closed`). If it stays running, the next run reuses it.
 
 ## Keys
 
@@ -110,6 +110,8 @@ end
 ### tmux prefix keys
 
 Each tab is a real tmux client, so your prefix reaches tmux and everything bound after it works, with the status bar showing the windows of the mirrored session. The window-switching keys behave like kitty tabs. When a tab's client changes window, for example with `<prefix> n`, `<prefix> p`, `<prefix> <digit>`, `<prefix> w` or `<prefix> c` (which creates a window and selects it), kitmux focuses the kitty tab of the window that was selected, creating the tab first for a new window, and puts the helper back on the window of its own tab. Every tab keeps showing its own window. Prompt-based keys such as `<prefix> ,` (rename window) work in the status line, and the tab title follows the new name.
+
+`<prefix> d` detaches the whole run, as it detaches your terminal in plain tmux. The tab's client exits cleanly while its helper session and window still exist, which no other exit does (a killed session takes the helper along). The tab then closes every tab of its OS window with one `kitten @ close-tab` call. The bridge sees the window gone and removes the helper sessions, as if you had closed the window. SESSION and its windows keep running, and `kitmux` opens them again. Other runs' windows stay open.
 
 ### Mouse
 

@@ -182,6 +182,10 @@ typeset -gr JQ_OS_STATE='
 typeset -gr JQ_OS_OF_RUN='
 [.[] | select(any(.tabs[].windows[]; .user_vars.kitmux_run == $r)) | .id][0] // empty'
 
+# jq filter: the id of the OS window holding kitty window $w.
+typeset -gr JQ_OS_OF_WINDOW='
+[.[] | select(any(.tabs[].windows[]; .id == $w)) | .id][0] // empty'
+
 # jq filter: the ids of all tabs of OS window $o.
 typeset -gr JQ_OS_TAB_IDS='
 .[] | select(.id == $o) | .tabs[].id'
@@ -464,12 +468,23 @@ os_window_of_run() {
 
 # Closes every tab of this run's OS window, which closes the window. Remote
 # control does not ask for confirmation, unlike kitty's own close and quit
-# actions, which ask while a tab's client is still running.
+# actions, which ask while a tab's client is still running. One close-tab
+# closes them all, so a tab's own process can call it: it dies with its tab.
 close_os_window() {
-  local tab
-  for tab in ${(f)"$(kt ls 2>/dev/null | jq -r --argjson o $os_window "$JQ_OS_TAB_IDS")"}; do
-    kt close-tab --match "id:$tab"
-  done
+  local -a tabs
+  tabs=(${(f)"$(kt ls 2>/dev/null | jq -r --argjson o $os_window "$JQ_OS_TAB_IDS")"})
+  (( $#tabs )) && kt close-tab --match "${(j: or :)${(@)tabs/#/id:}}"
+}
+
+# Detaches the run whose OS window holds this kitty window ($KITTY_WINDOW_ID)
+# by closing that OS window, the same as closing it by hand: its bridge sees it
+# gone and drops the helper sessions. Runs in a tab, where kitty sets
+# KITTY_LISTEN_ON to its socket.
+detach_run() {
+  [[ $KITTY_WINDOW_ID == <-> ]] || return 1
+  typeset -g kitty_sock=$KITTY_LISTEN_ON os_window
+  os_window=$(kt ls 2>/dev/null | jq -r --argjson w $KITTY_WINDOW_ID "$JQ_OS_OF_WINDOW")
+  [[ -n $os_window ]] && close_os_window
 }
 
 # Looks up the kitmux user vars of kitty window $1 and sets win_target,
@@ -978,14 +993,14 @@ hold_main() {
 }
 
 # Runs in a kitty tab. Args: session, target, tmux window id, the target's ssh
-# options (see target_ssh). Keeps a tmux
-# client attached to the window's helper session, reattaching after a network
-# drop, and returns (closing the tab) once the helper or the window is gone.
+# options (see target_ssh). Keeps a tmux client attached to the window's helper
+# session, reattaching after a network drop, and returns (closing the tab) once
+# the helper or the window is gone. A detached client closes the run's OS window.
 tab_main() {
   local session=$1 target=$2 window=$3 out
   local -a windows
   local helper=${session}${HELPER_SEPARATOR}${window#@}
-  local -i rc delay=$RECONNECT_MIN started
+  local -i rc attach_rc delay=$RECONNECT_MIN started
   valid_session "$session" && [[ $window == @<-> ]] || return 1
   target_ssh[$target]=$4
   init_target_env
@@ -993,9 +1008,9 @@ tab_main() {
     started=$EPOCHSECONDS
     shell_line sh -c "$ATTACH_SCRIPT" "=$helper:"
     on_target "$target" "$REPLY" -q -t
-    rc=$?
+    attach_rc=$?
     # Say so before the check below, which hangs for as long as the host does.
-    [[ $target != $LOCAL_TARGET ]] && (( rc == SSH_ERROR_STATUS )) &&
+    [[ $target != $LOCAL_TARGET ]] && (( attach_rc == SSH_ERROR_STATUS )) &&
       print -r -- "kitmux: reconnecting to ${target##*@}"
     out=$(tmux_on "$target" list-windows -t "=$helper:" -F '#{window_id}' 2>&1)
     rc=$?
@@ -1006,8 +1021,14 @@ tab_main() {
     fi
     windows=("${(@f)out}")
     (( rc == 0 && ${windows[(I)$window]} )) || return 0
+    # The client ended cleanly and its window lives on, so it was detached
+    # (<prefix> d). A killed session also exits 0, but takes the helper along.
+    if (( attach_rc == 0 )); then
+      detach_run
+      return 0
+    fi
     delay=$RECONNECT_MIN
-    # A client that exits at once (detach key held, broken terminal) must not spin.
+    # A client that exits at once (broken terminal) must not spin.
     (( EPOCHSECONDS - started >= RECONNECT_MIN )) || sleep $RECONNECT_MIN
   done
 }
