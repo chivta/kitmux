@@ -149,11 +149,12 @@ echo ok
 typeset -gr ATTACH_SCRIPT='infocmp "$TERM" >/dev/null 2>&1 || TERM=xterm-256color; export TERM; tmux has-session -t "$0" 2>/dev/null || exit 1; exec tmux attach-session -t "$0"'
 
 # jq filter: the kitmux tab windows of one target ($t) in OS window $o, one line
-# each: kitty tab id, kitty window id, tmux window id, sort key, tab title.
+# each: kitty tab id, kitty window id, tmux window id, sort key, 1 if it is the
+# active tab, tab title.
 typeset -gr JQ_TARGET_TABS='
 .[] | select(.id == $o) | .tabs[] | . as $tab | .windows[]
 | select(.user_vars.kitmux_target == $t and (.user_vars.kitmux_window // "") != "" and (.user_vars.kitmux_overlay // "") == "")
-| "\($tab.id) \(.id) \(.user_vars.kitmux_window) \(.user_vars.kitmux_order // "-") \($tab.title)"'
+| "\($tab.id) \(.id) \(.user_vars.kitmux_window) \(.user_vars.kitmux_order // "-") \(if $tab.is_active then 1 else 0 end) \($tab.title)"'
 
 # jq filter: the tabs of OS window $o in tab bar order, one line each: tab id,
 # 1 if it is the active tab, and the sort key of its kitmux window ("-" for
@@ -534,7 +535,7 @@ kitty_failure() {
 # Only the tabs of this run's OS window count. Returns 1 when the control
 # channel failed, LOOP_KITTY_GONE when kitty or this run's OS window is gone.
 reconcile() {
-  local line tag window index name helper title order listing ktab kwin sid event switch_to=
+  local line tag window index name helper title order active listing ktab kwin sid event switch_to= active_window=
   local -a windows keep_focus events
   local -A helper_window helper_of_sid tab_of kwin_of order_of title_of live switched
   local -i changed=0
@@ -563,7 +564,8 @@ reconcile() {
   listing=$(jq -r --arg t "$target" --argjson o $os_window "$JQ_TARGET_TABS" <<< "$listing")
   for line in "${(@f)listing}"; do
     [[ -n $line ]] || continue
-    IFS=' ' read -r ktab kwin window order title <<< "$line"
+    IFS=' ' read -r ktab kwin window order active title <<< "$line"
+    (( active )) && active_window=$window
     tab_of[$window]=$ktab
     kwin_of[$window]=$kwin
     order_of[$window]=$order
@@ -616,6 +618,20 @@ reconcile() {
   done
 
   (( ${+live[$switch_to]} )) && focus_window_tab $target $switch_to
+
+  # A window's alert flags (! in the status line) clear in every session of the
+  # group only when some session switches to it, and a helper never does. When
+  # the active tab changes, the mirrored session visits the window left behind,
+  # seen until now, and ends on the new one. It steps to the new one first, as a
+  # switch to its current window clears nothing.
+  if [[ -n $active_window && $active_window != $seen_window ]]; then
+    if (( ${+live[$seen_window]} )); then
+      ctl_cmd "select-window -t '=$session:$active_window'"
+      ctl_cmd "select-window -t '=$session:$seen_window'"
+    fi
+    ctl_cmd "select-window -t '=$session:$active_window'"
+    seen_window=$active_window
+  fi
 
   for helper in "${(@k)helper_window}"; do
     # The tab's client exits with its session, and the tab closes after it.
@@ -680,6 +696,7 @@ loop_main() {
   typeset -g target_index=$1 target=$2 save_script= ctl_pid=
   typeset -gi ctl_dirty=0 stop=0
   typeset -ga wc_changes=()   # session-window-changed notifications not yet acted on
+  typeset -g seen_window=     # tmux window of the last active tab, see reconcile
   local report line
   local -a lines
   local -i rc delay=$RECONNECT_MIN started

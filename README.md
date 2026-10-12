@@ -159,6 +159,8 @@ The tab's client reconnects when the network drops, showing `kitmux: reconnectin
 
 A bell in a tmux window marks only that window's kitty tab. Each helper holds every window of the group, and tmux's default `bell-action any` would ring every helper's client, so every kitmux tab would get the bell. kitmux sets `bell-action current` on each helper, so only the client showing the window rings. SESSION's own `bell-action` stays as you set it.
 
+The status line still marks a window that rang with `!` in every other tab, and tmux's default `window-status-bell-style reverse` shows it inverted. tmux keeps these marks per session and clears a window's marks in every session only when some session switches to that window, which a helper never does. So kitmux makes SESSION follow the active kitty tab. When the active tab changes, kitmux switches SESSION to the window you left, which you saw until then, and on to the window you opened, clearing both windows' marks within about 2 seconds. A window that rang and that you haven't opened keeps its `!` in the other tabs. A plain tmux client attached to SESSION outside kitmux jumps along to the window of each kitty tab you open.
+
 Programs can also set kitty user vars from inside tmux with an OSC 1337 `SetUserVar` sequence wrapped in tmux passthrough. `~/.claude/hooks/bell.sh` does this to set `bell_pending`. With `allow-passthrough on`, tmux delivers the sequence only to clients showing that pane's window, so only that tab's kitty window gets the var.
 
 ## Reboot behaviour
@@ -180,6 +182,7 @@ The plugin dir is the tmux global environment's `TMUX_PLUGIN_MANAGER_PATH`, whic
 - Each tab's status bar takes one row. A tab's client that switches to another session (`<prefix> s`, or a window listed under another session in `<prefix> w`) stays there, and kitmux does not move it back. The trees also list kitmux's helper sessions; pick windows under the tab's own session.
 - kitty's own scrollback in a kitmux tab holds nothing useful, because the tmux client redraws the screen. Use the scrollback key, or the mouse wheel when tmux's `mouse` is on.
 - kitty's `move_tab_*` and `goto_tab` actions act only on its active OS window. A run sorts its tabs only while its OS window is the active one and catches up when it becomes so. A tab opened in a window that is not the active one stays that window's active tab, instead of switching back to the tab that was. Tabs dragged out into another OS window keep working but are not re-sorted.
+- SESSION's current window follows the active kitmux tab (see [Bells](#bells)), so a plain tmux client attached to SESSION elsewhere switches windows whenever you change tabs in kitty.
 - Tab order comes from tmux. A tab reordered in kitty, by dragging it in the tab bar or with `move_tab_*`, moves back at the next sort, within about 2 seconds. Move the tmux window instead (`swap-window`, `move-window`), and the tab follows.
 - All runs share one kitty process, so its config (`kitty.conf`, `kitmux.conf`, the key aliases) comes from the run that started it. Quit that kitty to pick up changes.
 - Two runs for the same session on one target are refused, and so is a run that overlaps another run's session on some but not all of its targets. A bridge killed with SIGKILL leaves an OS window nothing manages. kitmux ignores its tabs when it looks for an open window.
