@@ -45,6 +45,7 @@ The keys work only in kitmux tabs. Plain kitty tabs in the same instance keep yo
 | Split stacked | cmd+shift+d | ctrl+alt+d | `split-window -v`, same directory |
 | Next / previous split | cmd+shift+right / cmd+shift+left | ctrl+shift+right / ctrl+shift+left | `select-pane -t :.+` / `:.-` |
 | Move split forward / backward | cmd+shift+f / cmd+shift+b | ctrl+shift+f / ctrl+shift+b | `swap-pane -D` / `-U` on the active pane, which stays active |
+| Start of line | cmd+left | not bound | sends ctrl+a twice, so tmux's `bind C-a send-prefix` passes one ctrl+a to the shell (your cmd+left sends ctrl+a, which is your tmux prefix) |
 | Close split | cmd+w | ctrl+shift+w | asks `Kill tmux pane in <tab>? [y/N]`, then `kill-pane` on the active pane |
 | Close tab | not bound, see below | not bound | asks `Kill tmux window <tab>? [y/N]`, then `kill-window` |
 | Scrollback | cmd+h | ctrl+shift+h | the active pane's full history (`capture-pane -p -e -J -S -`) in `less -R +G` |
