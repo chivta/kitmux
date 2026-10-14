@@ -1362,7 +1362,9 @@ launcher_main() {
   for target in $targets; do
     bridge_args+=($target "$target_ssh[$target]")
   done
-  $SELF _bridge $runtime_dir $session $bridge_args </dev/null >>$log_dir/kitmux.log 2>&1 &!
+  # Quoted: a target without ssh options passes an empty word, which an
+  # unquoted array expansion would drop, shifting every pair after it.
+  $SELF _bridge $runtime_dir $session "${bridge_args[@]}" </dev/null >>$log_dir/kitmux.log 2>&1 &!
   bridge_pid=$!
   until os_window_of_run $bridge_pid; do
     kill -0 $bridge_pid 2>/dev/null || die "kitty did not start, see $log_dir/kitmux.log"
