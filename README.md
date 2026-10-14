@@ -1,14 +1,14 @@
-# kitmux (split-keys)
+# kitmux
 
-kitmux opens one kitty OS window with one tab per window of a tmux session, on your machine and on SSH hosts. Every run opens its OS window in one shared kitty process, so macOS treats all kitmux windows as one app and cmd+` cycles through them. This branch is the `split-keys` variant, a zsh script. Each kitty tab runs a tmux client that shows one tmux window with your normal tmux status bar. tmux draws the panes, and kitty's split, close and new-tab keys send tmux commands. Your tmux prefix keys work in every tab too. The `split-native` branch is the other variant, a Go binary that turns every tmux pane into its own kitty window.
+kitmux opens one kitty OS window with one tab per window of a tmux session, on your machine and on SSH hosts. Every run opens its OS window in one shared kitty process, so macOS treats all kitmux windows as one app and cmd+` cycles through them. kitmux is a zsh script. Each kitty tab runs a tmux client that shows one tmux window with your normal tmux status bar. tmux draws the panes, and kitty's split, close and new-tab keys send tmux commands. Your tmux prefix keys work in every tab too.
 
 ## Install
 
 You need kitty (tested with 0.48.2), `jq`, and zsh (macOS's stock zsh 5.9 works) on the machine that runs kitty. Every target needs tmux 3.2 or newer and a POSIX `sh`. kitmux checks `tmux -V` on each target and refuses older versions.
 
 ```sh
-git clone -b split-keys <repo> ~/Projects/kitmux-split-keys
-ln -s ~/Projects/kitmux-split-keys/kitmux ~/.local/bin/kitmux
+git clone <repo> ~/Projects/kitmux
+ln -s ~/Projects/kitmux/kitmux ~/.local/bin/kitmux
 ```
 
 kitmux finds `kitmux.conf` next to the real path of the script, so a symlink on `PATH` is enough. Copy `kitmux-resurrect-hook` to every target that uses tmux-resurrect, see [tmux.conf](#tmuxconf).

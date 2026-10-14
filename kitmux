@@ -1,5 +1,5 @@
 #!/bin/zsh
-# kitmux (split-keys variant): mirrors one tmux session per target as native
+# kitmux: mirrors one tmux session per target as native
 # kitty tabs, one tab per tmux window. Each tab is a tmux client attached to a
 # helper session grouped with the mirrored session; tmux draws the panes and
 # the keys in kitmux.conf drive tmux pane and window commands.
